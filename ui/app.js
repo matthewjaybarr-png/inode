@@ -3,6 +3,7 @@ import { Pane } from './pane.js';
 import { extOf, kindOf, formatSize, formatDate, formatMode, sidebarModel, moved, BIN, TRASH, RECENT, placeName, isFolder, archiveStem } from './util.js';
 import { followDesktopTheme, openThemePicker } from './theme.js';
 import { setupOps } from './ops.js';
+import { setupDnd } from './dnd.js';
 import { icon, iconFor } from './icons.js';
 import { ACTIONS, PRESETS, buildMap, lookup, keysFor, comboOf, label } from './keys.js';
 
@@ -158,7 +159,7 @@ const app = {
       if (!g.items.length) nav.append(el('div', 'side-note', 'No pins yet. Right-click a folder or file and choose Pin to sidebar.'));
       for (const pl of g.items) {
         const row = el('div', 'side-row'), b = el('button', `place k-${pl.kind}`, pl.name), more = el('button', 'more', '⋯');
-        b.prepend(icon(pl.kind)); b.dataset.key = `${pl.kind === 'pin' ? 'p' : 'l'}:${pl.path}`; b.title = pl.title || pl.path || 'This PC';
+        b.prepend(icon(pl.kind)); b.dataset.drop = pl.path; b.dataset.key = `${pl.kind === 'pin' ? 'p' : 'l'}:${pl.path}`; b.title = pl.title || pl.path || 'This PC';
         b.onclick = () => { if (b.dataset.kind === 'file') return this.openPinned(pl.path, b); this.goPlace(pl.path).then(() => isFolder(pl.path) && pl.kind !== 'trash' && b.isConnected && this.checkPin(pl.path, b, pl.title || pl.path)); };
         more.title = `Options for ${pl.name}`; more.setAttribute('aria-label', more.title); more.setAttribute('aria-haspopup', 'menu');
         const menu = (at) => this.sideMenu(at, pl);
@@ -243,7 +244,7 @@ const app = {
     const it = (text, id, off) => { const c = keysFor(act(id), this.state.preset, this.state.keys)[0]; return [text, () => { this.closeSideMenu(); act(id).run(this); }, off, c ? label(c) : '']; };
     const pinned = (p) => this.state.pins.includes(p), two = !this.state.dual;
     const own = (text, run, off, id) => { const c = id && keysFor(act(id), this.state.preset, this.state.keys)[0]; return [text, () => { this.closeSideMenu(); run(); }, off, c ? label(c) : '']; };
-    const here = this.pane().path, noClip = !this.ops.hasClip, none = !this.pane().entries.length;
+    const here = this.pane().path, none = !this.pane().entries.length;
     const props = () => own('Properties', () => this.showProps(entry), false, 'properties');
     const stem = entry && !entry.dir ? archiveStem(entry.name) : '';
     const items = here === TRASH ? (entry
@@ -255,11 +256,11 @@ const app = {
         : [it('Refresh', 'refresh')])
       : entry
       ? [it('Open', 'open'), !entry.dir && own('Open with…', () => this.openWith(entry.path, ev)), entry.dir && it('Open in new tab', 'openNewTab'), entry.dir && own('Open in terminal', () => this.openTerminal(entry.path)), null,
-         it('Cut', 'cut'), it('Copy', 'copy'), entry.dir && own('Paste into folder', () => this.ops.paste(entry.path), noClip), it('Copy path', 'copyPath'), null,
+         it('Cut', 'cut'), it('Copy', 'copy'), entry.dir && own('Paste into folder', () => this.ops.paste(entry.path)), it('Copy path', 'copyPath'), null,
          it('Copy to other pane', 'copyOther', two), it('Move to other pane', 'moveOther', two), null,
          it('Rename', 'rename'), it('Compress to .zip', 'compress'), !!stem && it('Extract here', 'extractHere'), !!stem && it(`Extract to folder ${stem}`, 'extractTo'), it(pinned(entry.path) ? 'Unpin from sidebar' : 'Pin to sidebar', 'pinItem'), it(TRASH_LABEL, 'trash'), null,
          it(this.state.preview ? 'Hide preview' : 'Show preview', 'preview'), props()]
-      : [it('New folder', 'newFolder'), it('New file', 'newFile'), it('Paste', 'paste', noClip), null,
+      : [it('New folder', 'newFolder'), it('New file', 'newFile'), it('Paste', 'paste'), null,
          it('Open in terminal', 'terminal'), own('Copy folder path', () => this.copyPath([here])), it(pinned(here) ? 'Unpin this folder' : 'Pin this folder', 'pin'), null,
          it('Show / hide hidden items', 'hidden'), it(this.state.preview ? 'Hide preview' : 'Show preview', 'preview'), it('Refresh', 'refresh'), null,
          own('Folder properties', () => this.showProps({ name: here.split(/[\\/]/).filter(Boolean).pop() || here, path: here, dir: true }))];
@@ -470,6 +471,7 @@ async function start() {
   const fromArgs = asked != null, startPath = asked ?? app.home;
   app.renderPlaces(places);
   app.ops = setupOps(app);
+  setupDnd(app);
   app.rebuildKeys();
   const sel = $('#keys select');
   for (const [id, name] of Object.entries(PRESETS)) sel.append(new Option(name, id));

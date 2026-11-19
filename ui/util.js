@@ -107,7 +107,8 @@ export function relFolder(root, path) {
 }
 
 // Where normal Delete sends things: the system's own bin on each platform (see ops.rs).
-export const BIN = globalThis.navigator?.userAgent?.includes('Windows') ? 'Recycle Bin' : 'Trash';
+export const WIN = !!globalThis.navigator?.userAgent?.includes('Windows');
+export const BIN = WIN ? 'Recycle Bin' : 'Trash';
 
 // Virtual folders: lists that live at no real path (fs.rs builds them). '' is This PC on Windows.
 export const TRASH = 'trash:', RECENT = 'recent:';
@@ -118,3 +119,34 @@ export const isFolder = (path) => !!path && !LISTS.has(path);
 
 // "pack.tar.gz" -> "pack": the folder name "Extract to folder" uses; '' when the name is not an archive we extract.
 export const archiveStem = (name) => name.match(/^(.+?)\.(zip|7z|rar|tgz|tar(\.(gz|xz|zst|bz2))?)$/i)?.[1] || '';
+
+// Files as text/uri-list: percent-encoded file:// URIs, one per CRLF line. Other apps read this from the clipboard and from drags.
+export const toUri = (p) => `file://${/^[\\/]/.test(p) ? '' : '/'}${p.replace(/^\\\\/, '').split(/[\\/]/).map(encodeURIComponent).join('/').replace(/^([A-Za-z])%3A/, '$1:')}`;
+export const toUriList = (paths) => paths.map((p) => `${toUri(p)}\r\n`).join('');
+
+// The reverse: { paths, mv } from a text/uri-list or an x-special/gnome-copied-files payload (its first line says
+// "cut" or "copy"). Anything that is not a file:// URI is skipped. `win` turns drive and \\server URIs into Windows paths.
+export function fromUris(text, win = WIN) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const paths = lines.filter((l) => /^file:/i.test(l)).map((l) => {
+    let rest;
+    try { rest = decodeURIComponent(l.slice(5)); } catch { return null; }
+    const drive = win && rest.match(/^\/*([A-Za-z]:\/.*)$/);
+    if (drive) return drive[1].replace(/\//g, '\\');
+    const m = rest.match(/^\/\/([^/]*)(\/.*)$/); // //host/path; no host (or localhost) = this machine
+    if (!m) return rest.startsWith('/') && !rest.startsWith('//') ? rest : null;
+    return win && m[1] && m[1] !== 'localhost' ? `\\\\${m[1]}${m[2].replace(/\//g, '\\')}` : m[2];
+  }).filter(Boolean);
+  return { paths, mv: lines[0] === 'cut' };
+}
+
+// Why `sources` cannot be dropped into the folder `dest` ('' = they can). `mv` = the drop would move them.
+export function dropRefusal(sources, dest, mv) {
+  const fold = isWinPath(dest) ? (s) => s.toLowerCase() : (s) => s;
+  const norm = (p) => fold(p.replace(/[\\/]+$/, '')), d = norm(dest);
+  for (const s of sources.map(norm)) {
+    if (s === d) return 'A folder cannot be dropped onto itself';
+    if (d.startsWith(s) && /[\\/]/.test(d[s.length])) return 'A folder cannot be dropped into its own subfolder';
+  }
+  return mv && sources.every((s) => norm(norm(s).replace(/[\\/][^\\/]*$/, '')) === d) ? 'Already in this folder' : '';
+}

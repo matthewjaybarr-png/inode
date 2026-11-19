@@ -410,6 +410,19 @@ pub fn eject(path: &str) -> R<()> {
     if ok { Ok(()) } else { Err(IN_USE.into()) }
 }
 
+#[cfg(unix)]
+pub fn same_device(a: &str, b: &str) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    matches!((std::fs::metadata(a), std::fs::metadata(b)), (Ok(x), Ok(y)) if x.dev() == y.dev())
+}
+
+/// Windows: the same drive letter or network share.
+#[cfg(windows)]
+pub fn same_device(a: &str, b: &str) -> bool {
+    let root = |p: &str| Path::new(p).components().next().map(|c| c.as_os_str().to_ascii_lowercase());
+    root(a) == root(b)
+}
+
 /// Opens a file or folder in the desktop's default app (the user double-clicked it, so programs run too).
 pub fn open(path: &str) -> R<()> {
     if !Path::new(path).exists() && !(cfg!(windows) && path == BIN_SHELL) {

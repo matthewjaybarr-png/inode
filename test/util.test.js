@@ -93,3 +93,33 @@ test('archiveStem: the folder name for the archives we extract', () => {
   assert.deepEqual(names.map(archiveStem), ['pack', 'a.b', 'x', 'x', 'x', 'x', 'x', 'x', 'Old']);
   assert.deepEqual(['notes.txt', 'x.gz', '.zip', 'zip', 'a.zip.txt'].map(archiveStem), ['', '', '', '', '']);
 });
+
+import { toUri, toUriList, fromUris, dropRefusal } from '../ui/util.js';
+test('file URIs: encode for the clipboard and drags, decode what other apps give', () => {
+  assert.equal(toUri('/home/m/a b/é#1%.txt'), 'file:///home/m/a%20b/%C3%A9%231%25.txt');
+  assert.equal(toUri('C:\\Users\\m\\a b.txt'), 'file:///C:/Users/m/a%20b.txt');
+  assert.equal(toUri('\\\\srv\\share\\f.txt'), 'file://srv/share/f.txt');
+  assert.equal(toUriList(['/a', '/b c']), 'file:///a\r\nfile:///b%20c\r\n');
+  const paths = ['/home/m/a b/é#1%.txt', '/x'];
+  assert.deepEqual(fromUris(toUriList(paths), false), { paths, mv: false });
+  // GNOME's payload says cut or copy first; comments and non-file URIs are skipped
+  assert.deepEqual(fromUris('cut\nfile:///a%20b\nfile:///c', false), { paths: ['/a b', '/c'], mv: true });
+  assert.deepEqual(fromUris('copy\nfile:///a', false), { paths: ['/a'], mv: false });
+  assert.deepEqual(fromUris('# note\r\nhttps://x.test/a\r\nfile://localhost/a\r\nfile:/b\r\nfile:///bad%zz\r\n', false).paths, ['/a', '/b']);
+  assert.deepEqual(fromUris('just some text', false), { paths: [], mv: false });
+  // Windows: real file URIs, and what clip.rs prints (the whole path percent-encoded)
+  const win = ['C:\\Users\\m\\a b.txt', '\\\\srv\\share\\f.txt'];
+  assert.deepEqual(fromUris(toUriList(win), true).paths, win);
+  assert.deepEqual(fromUris('file:C%3A%2FUsers%2Fm%2Fa%20b.txt\r\nfile:%2F%2Fsrv%2Fshare%2Ff.txt\r\n', true).paths, win);
+});
+test('drops onto itself, into its own subfolder or back where it is are refused', () => {
+  assert.match(dropRefusal(['/a/b'], '/a/b', true), /onto itself/);
+  assert.match(dropRefusal(['/a/x', '/a/b'], '/a/b/c/', false), /own subfolder/);
+  assert.equal(dropRefusal(['/a/b'], '/a/bc', true), '');
+  assert.equal(dropRefusal(['/a/b'], '/a', true), 'Already in this folder');
+  assert.equal(dropRefusal(['/a/b'], '/a', false), ''); // a copy beside itself is "keep both"
+  assert.equal(dropRefusal(['/b'], '/', true), 'Already in this folder');
+  assert.equal(dropRefusal(['/a/b', '/c/d'], '/a', true), '');
+  assert.match(dropRefusal(['C:\\Docs'], 'c:\\docs\\Sub', true), /own subfolder/);
+  assert.equal(dropRefusal(['C:\\a.txt'], 'C:\\', true), 'Already in this folder');
+});

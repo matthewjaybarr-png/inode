@@ -1,5 +1,5 @@
 // One file pane: path bar, sortable list, its own history and cursor.
-import { sortEntries, formatSize, formatDate, kindOf, crumbs, resolveTyped, relFolder, TRASH, RECENT, placeName, isFolder } from './util.js';
+import { sortEntries, formatSize, formatDate, kindOf, crumbs, resolveTyped, relFolder, TRASH, RECENT, placeName, isFolder, WIN } from './util.js';
 import { icon, iconFor } from './icons.js';
 
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
@@ -119,7 +119,11 @@ export class Pane {
       const where = list ? (e.origin || e.path).replace(/[\\/][^\\/]*$/, '') || '/' : q && relFolder(this.path, e.path);
       if (where) { const w = el('span', 'where', where); w.title = e.path; name.append(w); }
       r.append(name, el('span', 'c-size', formatSize(e.size, e.dir)), el('span', 'c-date', formatDate(e.mtime)), el('span', 'c-kind', kindOf(e)));
-      r.onmousedown = (ev) => { if (ev.button === 0) this.click(i, ev); };
+      // A plain press on a row of a multi-selection keeps it (a drag may start here, see dnd.js); the click after narrows it.
+      const plain = (ev) => this.selected.size > 1 && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey;
+      r.onmousedown = (ev) => { if (ev.button !== 0) return; if (plain(ev) && this.selected.has(e.path)) { this.cursor = i; this.paintCursor(false); } else this.click(i, ev); };
+      r.onclick = (ev) => { if (plain(ev)) this.click(i, ev); };
+      r.draggable = !WIN && this.path !== TRASH; // Windows drags with pointer events instead
       r.ondblclick = () => this.activate(i);
       r.oncontextmenu = (ev) => {
         ev.preventDefault(); ev.stopPropagation(); // right-click acts on the selection when the row is in it, like Explorer
@@ -144,7 +148,7 @@ export class Pane {
   renderTabs() {
     const kids = this.tabs.map((t, i) => {
       const b = el('div', `tab${i === this.tabIdx ? ' on' : ''}`); b.setAttribute('role', 'tab');
-      b.setAttribute('aria-selected', String(i === this.tabIdx)); b.title = placeName(t.path || '') ?? t.path;
+      b.setAttribute('aria-selected', String(i === this.tabIdx)); b.dataset.drop = t.path ?? ''; b.title = placeName(t.path || '') ?? t.path;
       b.append(el('span', 'tab-name', tabName(t.path)));
       if (this.tabs.length > 1) { const x = el('button', 'tab-x', '×'); x.title = 'Close tab (Ctrl+W)'; x.setAttribute('aria-label', 'Close tab'); x.onmousedown = (ev) => ev.stopPropagation(); x.onclick = () => this.closeTab(i); b.append(x); }
       b.onmousedown = (ev) => { if (ev.button === 1) { ev.preventDefault(); this.closeTab(i); } else if (ev.button === 0) this.switchTab(i); };

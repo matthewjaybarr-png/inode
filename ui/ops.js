@@ -1,5 +1,5 @@
 // File operations: a one-at-a-time queue with progress, in-app prompts (WebView2 ignores confirm()), and undo.
-import { formatSize, BIN, TRASH, placeName, isFolder, archiveStem } from './util.js';
+import { formatSize, BIN, TRASH, placeName, isFolder, archiveStem, toUriList, fromUris } from './util.js';
 
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
 const $ = (s) => document.querySelector(s);
@@ -14,7 +14,7 @@ export function setupOps(app) {
   const marks = () => { $('#btn-undo').disabled = !undo.length; $('#btn-redo').disabled = !redo.length; };
   let running = null;
   let prompt = null; // { resolve, keys }
-  let clip = null; // { paths, mv } from Cut/Copy
+  let clip = null; // { paths, mv, pub, local } from Cut/Copy: the fast path; the system clipboard carries the same files
 
   const paint = () => {
     const el = $('#progress');
@@ -99,7 +99,7 @@ export function setupOps(app) {
 
   const ops = {
     get prompting() { return !!prompt; },
-    get hasClip() { return !!clip; },
+    send,
 
     // Keys while a prompt is up: Escape cancels, a prompt's own hotkeys answer it, Tab/Enter/Space work the buttons.
     promptKey(e) {
@@ -127,22 +127,29 @@ export function setupOps(app) {
       src.selected.clear();
     },
 
-    // Cut/Copy remember paths inside the app; Paste copies or moves them into the active pane's folder.
+    // Cut/Copy remember paths inside the app and put them on the system clipboard for other apps (which see a copy:
+    // only this app knows it was a cut). Paste copies or moves into the active pane's folder.
     clip(mv) {
       const p = app.pane(), paths = p.targets();
       if (!paths.length || !p.path) return;
       if (p.path === TRASH) return app.flash(`Restore items from the ${BIN} first (Alt+R), then cut or copy them`);
-      clip = { paths, mv };
+      const c = clip = { paths, mv };
+      // `local` = the system clipboard could not be set (no wl-copy, X11 session): the in-app clip still pastes here.
+      c.pub = invoke('clip_write', { paths, uris: toUriList(paths) }).catch(() => { c.local = true; });
       app.flash(`${mv ? 'Cut' : 'Copied'} ${plural(paths.length, 'item')} · Ctrl+V pastes`);
     },
 
     async paste(dest = app.pane().path) {
-      if (!clip) return app.flash('Nothing to paste: Ctrl+C or Ctrl+X some items first');
       if (!isFolder(dest)) return app.flash(`${placeName(dest) ?? 'This'} is a list, not a folder: open a folder to paste into it`);
-      if (clip.mv && clip.paths.every((s) => sameDir(parentOf(s), dest))) return app.flash('Already in this folder');
-      const { paths, mv } = clip;
-      if (mv) clip = null; // a cut pastes once, like Explorer
-      await send(paths, dest, mv);
+      await clip?.pub;
+      // The system clipboard decides (another app may have copied since); when it cannot be read the in-app clip stands.
+      const sys = await invoke('clip_read').then(fromUris, () => null);
+      const ours = clip && sys?.paths.length === clip.paths.length && sys.paths.every((p, i) => sameDir(p, clip.paths[i]));
+      const c = !sys || ours || (clip?.local && !sys.paths.length) ? clip : sys.paths.length ? sys : null;
+      if (!c) return app.flash('Nothing to paste: Ctrl+C or Ctrl+X some items first, here or in another app');
+      if (c.mv && c.paths.every((s) => sameDir(parentOf(s), dest))) return app.flash('Already in this folder');
+      if (c.mv && c === clip) clip = null; // a cut pastes once, like Explorer
+      await send(c.paths, dest, c.mv);
     },
 
     rename() {
@@ -196,13 +203,14 @@ export function setupOps(app) {
 
     // Normal Delete = the system bin, undoable. Where there is none (Windows network/removable drives) it asks
     // before a permanent delete, Cancel focused. Items that fail are left in place and named.
-    async trash() {
-      const p = app.pane(), paths = p.targets();
-      if (p.path === TRASH) return ops.purge(false);
-      if (!inFolder(p, 'delete things in it')) return;
+    // `dropped` = paths dragged onto the sidebar bin, instead of the active pane's selection.
+    async trash(dropped) {
+      const p = app.pane(), paths = dropped ?? p.targets();
+      if (!dropped && p.path === TRASH) return ops.purge(false);
+      if (!dropped && !inFolder(p, 'delete things in it')) return;
       if (!paths.length) return app.flash('Nothing to delete: select a file or folder first');
       const what = paths.length === 1 ? `"${baseName(paths[0])}"` : plural(paths.length, 'item');
-      if (!(await invoke('has_bin', { dir: p.path }).catch(() => false))) {
+      if (!(await invoke('has_bin', { dir: dropped ? parentOf(paths[0]) : p.path }).catch(() => false))) {
         const ok = await ask(`This drive has no ${BIN}, so ${what} cannot be undone if deleted. Delete permanently?`, [
           { id: 'delete', label: 'Delete permanently', danger: true },
           { id: null, label: 'Cancel', focus: true },
