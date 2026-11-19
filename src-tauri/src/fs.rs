@@ -25,7 +25,7 @@ pub struct Listing {
     pub entries: Vec<Entry>,
 }
 
-fn s(p: &Path) -> String {
+pub(crate) fn s(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
@@ -330,10 +330,6 @@ pub fn eject(path: &str) -> R<()> {
         .map_err(|e| e.to_string())?
         .success();
     if ok { Ok(()) } else { Err(IN_USE.into()) }
-}
-
-pub fn home_path() -> String {
-    home().map(|h| s(&h)).unwrap_or_else(|| if cfg!(windows) { String::new() } else { "/".into() })
 }
 
 /// Opens a file or folder in the desktop's default app (the user double-clicked it, so programs run too).

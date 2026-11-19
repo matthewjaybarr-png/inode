@@ -12,6 +12,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Inode",
         "width": 1300,
         "height": 820,

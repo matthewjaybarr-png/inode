@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Inode main window",
-  "windows": ["main"],
+  "description": "Every Inode window (each launch opens another one: w0, w1, ...)",
+  "windows": ["*"],
   "permissions": ["core:default", "core:window:allow-set-title"]
 }

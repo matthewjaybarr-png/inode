@@ -284,6 +284,9 @@ const app = {
       this.pane().list.focus();
     });
   },
+  newWindow() {
+    invoke('new_window', { path: this.pane().path }).catch((e) => this.flash(`Could not open a window: ${e}`));
+  },
   openTerminal(dir = this.pane().path) {
     if (dir) invoke('open_terminal', { dir }).catch((e) => this.flash(`Could not open a terminal: ${e}`));
   },
@@ -428,8 +431,10 @@ function splitter() {
 async function start() {
   followDesktopTheme(() => {});
   app.panes = [...document.querySelectorAll('.pane')].map((el, i) => new Pane(el, app, i));
-  const [places, startPath] = await Promise.all([invoke('places'), invoke('startup_path')]);
+  // asked = the folder this window was opened for (command line, Ctrl+N, "show in folder"); select = the item to land on.
+  const [places, [asked, select]] = await Promise.all([invoke('places'), invoke('startup_path')]);
   app.home = places.find((p) => p.kind === 'home')?.path || '';
+  const fromArgs = asked != null, startPath = asked ?? app.home;
   app.renderPlaces(places);
   app.ops = setupOps(app);
   app.rebuildKeys();
@@ -448,8 +453,7 @@ async function start() {
   // No browser Back/Forward/Reload menu anywhere; text fields keep theirs for cut and paste.
   addEventListener('contextmenu', (e) => { if (!e.target.closest?.('input, textarea')) e.preventDefault(); });
   addEventListener('focus', () => invoke('places').then((p) => app.renderPlaces(p)).catch(() => {})); // a drive may have come back
-  // A folder passed on the command line wins over the remembered left pane.
-  const fromArgs = startPath !== app.home;
+  // A folder the window was opened for wins over the remembered left pane.
   const [a, b] = app.state.paths;
   const left = fromArgs ? startPath : (a ?? startPath);
   // Restore each pane's tabs; a command-line folder replaces the left pane's active tab.
@@ -462,7 +466,7 @@ async function start() {
     }
     const tabPath = pane.tabs[pane.tabIdx].path;
     const want = i === 0 ? (fromArgs ? startPath : tabPath ?? left) : (tabPath ?? b ?? left);
-    if (!(await pane.go(want, { push: false }))) await pane.go(app.home, { push: false });
+    if (!(await pane.go(want, { push: false, keep: i === 0 ? select : null }))) await pane.go(app.home, { push: false });
   }
   app.focus(fromArgs ? 0 : Math.min(app.state.focus, app.state.dual ? 1 : 0));
 }

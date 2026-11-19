@@ -27,6 +27,7 @@ export const ACTIONS = [
   { id: 'sameFolder', group: 'Panes', label: 'Same folder in other pane', keys: ['Ctrl+O'], run: (a) => a.state.dual && a.other().go(a.pane().path) },
   { id: 'preview', group: 'Panes', label: 'Preview on / off', keys: ['Alt+P'], vim: ['Alt+P', 'P'], run: (a) => a.togglePreview() },
 
+  { id: 'newWindow', group: 'Tabs', label: 'New window', keys: ['Ctrl+N'], run: (a) => a.newWindow() },
   { id: 'newTab', group: 'Tabs', label: 'New tab', keys: ['Ctrl+T'], run: (a) => a.pane().newTab() },
   { id: 'openNewTab', group: 'Tabs', label: 'Open folder in new tab', keys: ['Ctrl+Enter'], run: (a) => { const e = a.pane().rows[a.pane().cursor]; if (e?.dir) a.pane().newTab(e.path); } },
   { id: 'closeTab', group: 'Tabs', label: 'Close tab', keys: ['Ctrl+W'], run: (a) => a.pane().closeTab() },

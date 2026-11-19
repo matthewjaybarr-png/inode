@@ -1,9 +1,13 @@
 mod choice;
+#[cfg(target_os = "linux")]
+mod dbus;
 mod desktop;
 mod fs;
 mod ops;
+#[cfg(target_os = "linux")]
+pub mod setup;
 
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 type R<T> = Result<T, String>;
 
@@ -78,10 +82,57 @@ async fn open_terminal(dir: String) -> R<()> {
     fs::open_terminal(&dir)
 }
 
-/// The folder to start in: the first non-flag argument (xdg-open / Win+E pass one), else home.
+/// Per window label: the folder it was asked to open (None = wherever the user left off) and the item to put the cursor on.
+#[derive(Default)]
+struct Starts(std::sync::Mutex<std::collections::HashMap<String, (Option<String>, Option<String>)>>);
+
+/// `[folder, item]` for the calling window (see Starts).
 #[tauri::command]
-fn startup_path() -> String {
-    std::env::args().skip(1).find(|a| !a.starts_with('-')).map(|a| a.strip_prefix("file://").map(String::from).unwrap_or(a)).unwrap_or_else(fs::home_path)
+fn startup_path(window: tauri::Window, starts: tauri::State<Starts>) -> (Option<String>, Option<String>) {
+    starts.0.lock().unwrap().get(window.label()).cloned().unwrap_or_default()
+}
+
+/// A `file://` URI as a path (percent-decoded); None for anything else.
+fn file_uri(uri: &str) -> Option<std::path::PathBuf> {
+    uri.starts_with("file://").then(|| tauri::Url::parse(uri).ok()?.to_file_path().ok()).flatten()
+}
+
+/// The folder a command line asks for: the first non-flag argument (xdg-open / Win+E pass one), relative to `cwd`.
+fn arg_path(args: &[String], cwd: &str) -> Option<String> {
+    let a = args.iter().skip(1).find(|a| !a.starts_with('-'))?;
+    Some(fs::s(&file_uri(a).unwrap_or_else(|| std::path::Path::new(cwd).join(a))))
+}
+
+/// Opens one more window, each with its own label. Built on its own thread: creating a window
+/// straight from a command or a plugin callback can deadlock on Windows.
+fn open_window(app: &tauri::AppHandle, path: Option<String>, select: Option<String>) {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let mut cfg = app.config().app.windows[0].clone();
+    cfg.label = format!("w{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    app.state::<Starts>().0.lock().unwrap().insert(cfg.label.clone(), (path, select));
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = tauri::WebviewWindowBuilder::from_config(&app, &cfg).and_then(|b| b.build()) {
+            eprintln!("inode: could not open a window: {e}");
+        }
+    });
+}
+
+#[tauri::command]
+async fn new_window(app: tauri::AppHandle, path: Option<String>) {
+    open_window(&app, path, None)
+}
+
+#[cfg(all(test, unix))]
+mod arg_tests {
+    #[test]
+    fn folder_argument_is_resolved() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(super::arg_path(&args(&["inode", "--flag", "file:///tmp/a%20b"]), "/home/u").as_deref(), Some("/tmp/a b"));
+        assert_eq!(super::arg_path(&args(&["inode", "docs"]), "/home/u").as_deref(), Some("/home/u/docs"));
+        assert_eq!(super::arg_path(&args(&["inode", "/etc"]), "/home/u").as_deref(), Some("/etc"));
+        assert_eq!(super::arg_path(&args(&["inode", "--service"]), "/home/u"), None);
+    }
 }
 
 #[tauri::command]
@@ -197,8 +248,24 @@ async fn set_theme_choice(scope: String, value: Option<String>) -> Result<(), St
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // `--service` (D-Bus activation) runs with no window until a FileManager1 call asks for one.
+    let launch = |app: &tauri::AppHandle, args: &[String], cwd: &str| {
+        if !args.iter().any(|a| a == "--service") {
+            open_window(app, arg_path(args, cwd), None);
+        }
+    };
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![theme_choice, set_theme_choice, list_dir, places, open_path, open_terminal, startup_path, desktop::desktop_theme, conflicts, transfer, move_back, rename_path, new_folder, trash, has_bin, remove_empty_folder, restore, delete_paths, read_text, probe, search, eject, props, apps_for, open_with, compress])
+        // A second `inode [path]` hands its arguments to the running one, which opens the window.
+        .plugin(tauri_plugin_single_instance::init(move |app, args, cwd| launch(app, &args, &cwd)))
+        .manage(Starts::default())
+        .setup(move |app| {
+            #[cfg(target_os = "linux")]
+            dbus::serve(app.handle());
+            let cwd = std::env::current_dir().unwrap_or_default();
+            launch(app.handle(), &std::env::args().collect::<Vec<_>>(), &cwd.to_string_lossy());
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![new_window, theme_choice, set_theme_choice, list_dir, places, open_path, open_terminal, startup_path, desktop::desktop_theme, conflicts, transfer, move_back, rename_path, new_folder, trash, has_bin, remove_empty_folder, restore, delete_paths, read_text, probe, search, eject, props, apps_for, open_with, compress])
         .run(tauri::generate_context!())
         .expect("error while running Inode");
 }
