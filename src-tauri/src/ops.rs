@@ -401,20 +401,43 @@ mod platform {
         Some((crate::fs::unpercent(get("Path=")?), when))
     }
 
-    /// Every item in the home trash that has both its .trashinfo and its file.
-    /// shortcut: .Trash-$uid folders on other drives are not listed; walk the mounts here when that is wanted.
+    /// The home trash, then `.Trash-$uid` on every mounted drive (paths in those are relative to the drive's top).
+    fn trash_dirs() -> Vec<(PathBuf, Option<PathBuf>)> {
+        let uid = unsafe { getuid() };
+        let mut dirs = vec![(home_trash(), None)];
+        // Tests point the home trash at a temp folder and empty "the Trash": never let them reach real drives.
+        if cfg!(test) {
+            return dirs;
+        }
+        for line in std::fs::read_to_string("/proc/mounts").unwrap_or_default().lines() {
+            // /proc/mounts writes a space in a mount point as \040
+            let Some(top) = line.split(' ').nth(1).map(|m| PathBuf::from(m.replace("\\040", " "))) else { continue };
+            let t = top.join(format!(".Trash-{uid}"));
+            if t.join("info").is_dir() && !dirs.iter().any(|(d, _)| *d == t) {
+                dirs.push((t, Some(top)));
+            }
+        }
+        dirs
+    }
+
+    /// Every trashed item that has both its .trashinfo and its file.
     pub fn items() -> Vec<(Trashed, f64)> {
-        let trash = home_trash();
-        let Ok(rd) = std::fs::read_dir(trash.join("info")) else { return Vec::new() };
-        rd.flatten()
-            .filter_map(|de| {
+        let mut out = Vec::new();
+        for (trash, top) in trash_dirs() {
+            let Ok(rd) = std::fs::read_dir(trash.join("info")) else { continue };
+            out.extend(rd.flatten().filter_map(|de| {
                 let info = de.path();
                 let stored = trash.join("files").join(info.file_name()?.to_str()?.strip_suffix(".trashinfo")?);
                 stored.symlink_metadata().ok()?;
-                let (original, when) = parse_info(&std::fs::read_to_string(&info).ok()?)?;
+                let (path, when) = parse_info(&std::fs::read_to_string(&info).ok()?)?;
+                let original = match &top {
+                    Some(top) if !path.starts_with('/') => s(&top.join(path)),
+                    _ => path,
+                };
                 Some((Trashed { original, stored: s(&stored), info: s(&info) }, when))
-            })
-            .collect()
+            }));
+        }
+        out
     }
 
     /// Top of the mount holding `p`: climb while the device stays the same.

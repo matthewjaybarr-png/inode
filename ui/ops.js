@@ -14,6 +14,7 @@ export function setupOps(app) {
   const marks = () => { $('#btn-undo').disabled = !undo.length; $('#btn-redo').disabled = !redo.length; };
   let running = null;
   let prompt = null; // { resolve, keys }
+  let spent = null; // paths of a cut already pasted: the system clipboard still lists them, but they have moved
   let clip = null; // { paths, mv, pub, local } from Cut/Copy: the fast path; the system clipboard carries the same files
 
   const paint = () => {
@@ -134,6 +135,7 @@ export function setupOps(app) {
       if (!paths.length || !p.path) return;
       if (p.path === TRASH) return app.flash(`Restore items from the ${BIN} first (Alt+R), then cut or copy them`);
       const c = clip = { paths, mv };
+      spent = null;
       // `local` = the system clipboard could not be set (no wl-copy, X11 session): the in-app clip still pastes here.
       c.pub = invoke('clip_write', { paths, uris: toUriList(paths) }).catch(() => { c.local = true; });
       app.flash(`${mv ? 'Cut' : 'Copied'} ${plural(paths.length, 'item')} · Ctrl+V pastes`);
@@ -148,7 +150,8 @@ export function setupOps(app) {
       const c = !sys || ours || (clip?.local && !sys.paths.length) ? clip : sys.paths.length ? sys : null;
       if (!c) return app.flash('Nothing to paste: Ctrl+C or Ctrl+X some items first, here or in another app');
       if (c.mv && c.paths.every((s) => sameDir(parentOf(s), dest))) return app.flash('Already in this folder');
-      if (c.mv && c === clip) clip = null; // a cut pastes once, like Explorer
+      if (c === sys && spent && sys.paths.length === spent.length && sys.paths.every((p, i) => p === spent[i])) return app.flash('Nothing to paste: that cut was already pasted');
+      if (c.mv && c === clip) { spent = clip.paths; clip = null; } // a cut pastes once, like Explorer
       await send(c.paths, dest, c.mv);
     },
 
