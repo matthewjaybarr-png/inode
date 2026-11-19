@@ -1,6 +1,6 @@
 // Inode: two panes side by side, a places sidebar, keyboard-first.
 import { Pane } from './pane.js';
-import { extOf, kindOf, formatSize, formatDate, formatMode, sidebarModel, moved, BIN } from './util.js';
+import { extOf, kindOf, formatSize, formatDate, formatMode, sidebarModel, moved, BIN, TRASH, RECENT, placeName, isFolder, archiveStem } from './util.js';
 import { followDesktopTheme, openThemePicker } from './theme.js';
 import { setupOps } from './ops.js';
 import { icon, iconFor } from './icons.js';
@@ -100,19 +100,25 @@ const app = {
     const sel = p.selected.size, n = p.rows.length;
     const hiddenCount = p.entries.length - (this.state.hidden ? p.entries.length : p.entries.filter((e) => !e.hidden).length);
     $('#status-left').textContent = `${this.state.dual ? `${this.active ? 'Right' : 'Left'} pane · ` : ''}${n} item${n === 1 ? '' : 's'}${sel ? ` · ${sel} selected` : ''}${hiddenCount ? ` · ${hiddenCount} hidden` : ''}`;
-    if (!this.flashing) $('#status-right').textContent = p.path || 'This PC';
+    if (!this.flashing) $('#status-right').textContent = placeName(p.path) ?? p.path;
     this.actionBar(p);
     if (this.state.preview) { clearTimeout(this.previewT); this.previewT = setTimeout(() => this.showPreview(p.rows[p.cursor]), 120); }
   },
-  // New folder / Delete state for the active pane. A disabled button can't show a tooltip, so the reason is spelled out beside it.
+  // New folder / New file / Delete state for the active pane. A disabled button can't show a tooltip, so the reason is spelled out beside it.
   actionBar(p = this.pane()) {
-    const n = p.path ? p.targets().length : 0, nf = $('#btn-new'), del = $('#btn-trash');
-    nf.disabled = !p.path; del.disabled = !n;
-    del.textContent = n > 1 ? `Delete (${n})` : 'Delete';
-    del.title = n ? `Move ${n === 1 ? 'the item under the cursor' : `${n} selected items`} to the ${BIN} (Delete). Shift+Delete deletes permanently.` : 'Nothing to delete: select a file or folder first';
-    nf.title = p.path ? `New folder in ${p.path} (Ctrl+Shift+N)` : 'This PC lists drives; open a drive or folder to make a folder in it';
-    $('#act-where').textContent = p.path ? `${this.state.dual ? `${this.active ? 'Right' : 'Left'} pane: ` : ''}${p.path}${n ? ` · ${n} to delete` : ' · nothing selected'}`
-      : 'This PC: open a drive or folder to make a new folder there';
+    const ok = isFolder(p.path), bin = p.path === TRASH, n = ok || bin ? p.targets().length : 0, nf = $('#btn-new'), file = $('#btn-newfile'), del = $('#btn-trash');
+    const off = `${placeName(p.path) ?? 'This'} is a list, not a folder; open a drive or folder to make something in it`;
+    nf.disabled = file.disabled = !ok; del.disabled = !n;
+    del.textContent = `Delete${bin ? ' permanently' : ''}${n > 1 ? ` (${n})` : ''}`;
+    del.title = !n ? 'Nothing to delete: select a file or folder first'
+      : bin ? `Delete ${n === 1 ? 'the item under the cursor' : `${n} selected items`} from the ${BIN} permanently (Delete). It asks first.`
+        : `Move ${n === 1 ? 'the item under the cursor' : `${n} selected items`} to the ${BIN} (Delete). Shift+Delete deletes permanently.`;
+    nf.title = ok ? `New folder in ${p.path} (Ctrl+Shift+N)` : off;
+    file.title = ok ? `New file in ${p.path} (Ctrl+Alt+N)` : off;
+    $('#act-where').textContent = ok ? `${this.state.dual ? `${this.active ? 'Right' : 'Left'} pane: ` : ''}${p.path}${n ? ` · ${n} to delete` : ' · nothing selected'}`
+      : bin ? `${BIN}: right-click an item to restore it; right-click empty space to restore everything or empty it`
+        : p.path === RECENT ? 'Recent: files used lately, newest first; right-click one to open its folder. Nothing can be made here.'
+          : 'This PC: open a drive or folder to make a new folder there';
   },
   flash(msg) {
     clearTimeout(this.flashing);
@@ -153,7 +159,7 @@ const app = {
       for (const pl of g.items) {
         const row = el('div', 'side-row'), b = el('button', `place k-${pl.kind}`, pl.name), more = el('button', 'more', '⋯');
         b.prepend(icon(pl.kind)); b.dataset.key = `${pl.kind === 'pin' ? 'p' : 'l'}:${pl.path}`; b.title = pl.title || pl.path || 'This PC';
-        b.onclick = () => { if (b.dataset.kind === 'file') return this.openPinned(pl.path, b); this.pane().go(pl.path).then(() => pl.kind !== 'computer' && b.isConnected && this.checkPin(pl.path, b, pl.title || pl.path)); this.focus(this.active); };
+        b.onclick = () => { if (b.dataset.kind === 'file') return this.openPinned(pl.path, b); this.goPlace(pl.path).then(() => isFolder(pl.path) && pl.kind !== 'trash' && b.isConnected && this.checkPin(pl.path, b, pl.title || pl.path)); };
         more.title = `Options for ${pl.name}`; more.setAttribute('aria-label', more.title); more.setAttribute('aria-haspopup', 'menu');
         const menu = (at) => this.sideMenu(at, pl);
         more.onclick = () => menu(more); row.oncontextmenu = (e) => { e.preventDefault(); menu(more); };
@@ -178,13 +184,30 @@ const app = {
       for (const pl of hidden) {
         const row = el('div', 'side-row hidden-row'), b = el('button', 'place', pl.name || 'This PC'), show = el('button', 'show', 'Show');
         b.dataset.key = `h:${pl.path}`; b.title = `${pl.path || 'This PC'} (hidden from the sidebar; click to open it)`;
-        b.onclick = () => { this.pane().go(pl.path); this.focus(this.active); };
+        b.onclick = () => this.goPlace(pl.path);
         show.setAttribute('aria-label', `Show ${pl.name} in the sidebar`); show.onclick = () => flip(side.hide, pl.path);
         row.append(b, show); nav.append(row);
       }
       if (hidden.length > 1) { const all = el('button', 'place show-all', 'Show all'); all.dataset.key = 'showall'; all.onclick = () => { side.hide.length = 0; this.renderPlaces(); this.saveState(); }; nav.append(all); }
     }
     if (keep) [...nav.querySelectorAll('[data-key]')].find((x) => x.dataset.key === keep)?.focus();
+  },
+  // Opens a sidebar place in the active pane. Windows' Recycle Bin is not listed in the app yet: Explorer shows it.
+  async goPlace(path) {
+    if (path.startsWith('shell:')) return invoke('open_path', { path }).catch((e) => this.flash(`Could not open the ${BIN}: ${e}`));
+    const done = this.pane().go(path);
+    this.focus(this.active);
+    return done;
+  },
+  goKind(kind) {
+    const pl = this.places.find((p) => p.kind === kind);
+    return pl ? this.goPlace(pl.path) : this.flash('Recent is not available on Windows yet');
+  },
+  // The folder an item lives in, with the item selected (Recent, search results).
+  async openFolder(e = this.pane().rows[this.pane().cursor]) {
+    const p = this.pane();
+    if (!e || !p.path || p.path === TRASH) return;
+    if (await p.go(e.path.replace(/[\\/][^\\/]*$/, '') || '/', { keep: e.path })) { p.selected = new Set([e.path]); p.paintCursor(false); }
   },
   // A pin on a drive that is away stays in the list, marked; the check runs off the UI so a dead share cannot freeze the app.
   checkPin(path, button, tip = path) {
@@ -210,7 +233,7 @@ const app = {
          ['Move down', act(() => { this.state.pins = moved(pins, pl.path, 1); }), i === pins.length - 1],
          ['Try again', () => { this.closeSideMenu(); if (at.previousElementSibling?.dataset.kind !== 'file') this.pane().go(pl.path); this.renderPlaces(); }],
          ['Unpin', () => { this.closeSideMenu(); this.togglePin(pl.path); }]]
-      : [[i >= 0 ? 'Unpin' : 'Pin to top', () => { this.closeSideMenu(); this.togglePin(pl.path); }, pl.path === ''],
+      : [[i >= 0 ? 'Unpin' : 'Pin to top', () => { this.closeSideMenu(); this.togglePin(pl.path); }, !isFolder(pl.path) || pl.kind === 'trash'],
          ['Hide from sidebar', act(() => { side.hide.push(pl.path); this.flash(`${pl.name} is hidden. Manage sidebar shows it again.`); })]];
     this.popMenu(at.getBoundingClientRect(), items, at);
   },
@@ -220,14 +243,23 @@ const app = {
     const it = (text, id, off) => { const c = keysFor(act(id), this.state.preset, this.state.keys)[0]; return [text, () => { this.closeSideMenu(); act(id).run(this); }, off, c ? label(c) : '']; };
     const pinned = (p) => this.state.pins.includes(p), two = !this.state.dual;
     const own = (text, run, off, id) => { const c = id && keysFor(act(id), this.state.preset, this.state.keys)[0]; return [text, () => { this.closeSideMenu(); run(); }, off, c ? label(c) : '']; };
-    const here = this.pane().path, noClip = !this.ops.hasClip;
-    const items = entry
+    const here = this.pane().path, noClip = !this.ops.hasClip, none = !this.pane().entries.length;
+    const props = () => own('Properties', () => this.showProps(entry), false, 'properties');
+    const stem = entry && !entry.dir ? archiveStem(entry.name) : '';
+    const items = here === TRASH ? (entry
+      ? [it('Restore', 'restore'), it('Delete permanently', 'deleteForever'), null, props()]
+      : [it('Restore all', 'restoreAll', none), it(`Empty ${BIN}`, 'emptyTrash', none), null, it('Refresh', 'refresh')])
+      : here === RECENT ? (entry
+        ? [it('Open', 'open'), !entry.dir && own('Open with…', () => this.openWith(entry.path, ev)), it('Open containing folder', 'openFolder'), null,
+           it('Copy', 'copy'), it('Copy path', 'copyPath'), it('Copy to other pane', 'copyOther', two), null, props()]
+        : [it('Refresh', 'refresh')])
+      : entry
       ? [it('Open', 'open'), !entry.dir && own('Open with…', () => this.openWith(entry.path, ev)), entry.dir && it('Open in new tab', 'openNewTab'), entry.dir && own('Open in terminal', () => this.openTerminal(entry.path)), null,
          it('Cut', 'cut'), it('Copy', 'copy'), entry.dir && own('Paste into folder', () => this.ops.paste(entry.path), noClip), it('Copy path', 'copyPath'), null,
          it('Copy to other pane', 'copyOther', two), it('Move to other pane', 'moveOther', two), null,
-         it('Rename', 'rename'), it('Compress to .zip', 'compress'), it(pinned(entry.path) ? 'Unpin from sidebar' : 'Pin to sidebar', 'pinItem'), it(TRASH_LABEL, 'trash'), null,
-         it(this.state.preview ? 'Hide preview' : 'Show preview', 'preview'), own('Properties', () => this.showProps(entry), false, 'properties')]
-      : [it('New folder', 'newFolder'), it('Paste', 'paste', noClip), null,
+         it('Rename', 'rename'), it('Compress to .zip', 'compress'), !!stem && it('Extract here', 'extractHere'), !!stem && it(`Extract to folder ${stem}`, 'extractTo'), it(pinned(entry.path) ? 'Unpin from sidebar' : 'Pin to sidebar', 'pinItem'), it(TRASH_LABEL, 'trash'), null,
+         it(this.state.preview ? 'Hide preview' : 'Show preview', 'preview'), props()]
+      : [it('New folder', 'newFolder'), it('New file', 'newFile'), it('Paste', 'paste', noClip), null,
          it('Open in terminal', 'terminal'), own('Copy folder path', () => this.copyPath([here])), it(pinned(here) ? 'Unpin this folder' : 'Pin this folder', 'pin'), null,
          it('Show / hide hidden items', 'hidden'), it(this.state.preview ? 'Hide preview' : 'Show preview', 'preview'), it('Refresh', 'refresh'), null,
          own('Folder properties', () => this.showProps({ name: here.split(/[\\/]/).filter(Boolean).pop() || here, path: here, dir: true }))];
@@ -285,7 +317,7 @@ const app = {
     });
   },
   openTerminal(dir = this.pane().path) {
-    if (dir) invoke('open_terminal', { dir }).catch((e) => this.flash(`Could not open a terminal: ${e}`));
+    if (isFolder(dir)) invoke('open_terminal', { dir }).catch((e) => this.flash(`Could not open a terminal: ${e}`));
   },
   // Small popup menu; items are [text, run, disabled, key], null for a separator. `back` gets focus on Escape.
   popMenu(r, items, back) {
@@ -323,6 +355,7 @@ const app = {
   togglePin(path) {
     if (path == null) return;
     const pins = this.state.pins, i = pins.indexOf(path);
+    if (i < 0 && !isFolder(path)) return this.flash('Only real folders and files can be pinned');
     if (i >= 0) pins.splice(i, 1); else pins.push(path);
     this.flash(i >= 0 ? 'Unpinned from the sidebar' : 'Pinned to the sidebar');
     this.renderPlaces(); this.panes.forEach((p) => p.renderTabs()); this.saveState();

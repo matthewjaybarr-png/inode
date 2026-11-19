@@ -15,7 +15,14 @@ pub struct Entry {
     pub mtime: f64,
     pub hidden: bool,
     pub link: bool,
+    /// Trash only: the full path the item was deleted from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
+
+/// The virtual folders: lists that live at no real path (the UI treats them like "This PC").
+pub const TRASH: &str = "trash:";
+pub const RECENT: &str = "recent:";
 
 #[derive(Serialize, Debug)]
 pub struct Listing {
@@ -140,7 +147,7 @@ fn entry(de: &std::fs::DirEntry) -> Option<(Entry, bool)> {
     // Follow links so a link to a folder opens like a folder; a broken link stays a plain entry.
     let md = if link { std::fs::metadata(de.path()).unwrap_or(lmd) } else { lmd };
     let mtime = md.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as f64).unwrap_or(0.0);
-    Some((Entry { hidden, path: s(&de.path()), name, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime, link }, real_dir))
+    Some((Entry { hidden, path: s(&de.path()), name, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime, link, origin: None }, real_dir))
 }
 
 #[derive(Serialize, Debug)]
@@ -212,9 +219,13 @@ pub fn list(path: &str) -> R<Listing> {
     if path.is_empty() && cfg!(windows) {
         let entries = drives()
             .into_iter()
-            .map(|d| Entry { name: d.clone(), path: d, dir: true, size: 0, mtime: 0.0, hidden: false, link: false })
+            .map(|d| Entry { name: d.clone(), path: d, dir: true, size: 0, mtime: 0.0, hidden: false, link: false, origin: None })
             .collect();
         return Ok(Listing { path: String::new(), parent: None, entries });
+    }
+    if path == TRASH || path == RECENT {
+        let entries = if path == TRASH { trash_entries() } else { recent_entries(&std::fs::read_to_string(data_home().join("recently-used.xbel")).unwrap_or_default()) };
+        return Ok(Listing { path: path.into(), parent: None, entries });
     }
     let dir = PathBuf::from(path);
     let rd = std::fs::read_dir(&dir).map_err(|e| format!("Cannot open {path}: {e}"))?;
@@ -248,7 +259,64 @@ fn home() -> Option<PathBuf> {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
 }
 
-/// Home, the usual user folders that exist, then drives.
+/// Where the desktop keeps per-user data (the Trash, the recent-files list).
+pub fn data_home() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"))).unwrap_or_else(|| PathBuf::from("/tmp"))
+}
+
+/// "a%20b" -> "a b" (trashinfo paths and file:// links); a stray % stays as it is.
+pub fn unpercent(text: &str) -> String {
+    let b = text.as_bytes();
+    let (mut out, mut i) = (Vec::with_capacity(b.len()), 0);
+    while i < b.len() {
+        let hex = (b[i] == b'%').then(|| b.get(i + 1..i + 3)).flatten().and_then(|h| u8::from_str_radix(std::str::from_utf8(h).ok()?, 16).ok());
+        out.push(hex.unwrap_or(b[i]));
+        i += if hex.is_some() { 3 } else { 1 };
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The home trash as a listing: original name, stored path, deletion time in the date column.
+fn trash_entries() -> Vec<Entry> {
+    let made = |(t, when): (crate::ops::Trashed, f64)| {
+        let md = Path::new(&t.stored).symlink_metadata().ok()?;
+        let name = Path::new(&t.original).file_name()?.to_string_lossy().into_owned();
+        Some(Entry { name, path: t.stored, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime: when, hidden: false, link: md.file_type().is_symlink(), origin: Some(t.original) })
+    };
+    crate::ops::trash_items().into_iter().filter_map(made).collect()
+}
+
+/// (path, modified ms) of each file:// bookmark in a recently-used.xbel, in file order.
+fn parse_recent(xbel: &str) -> Vec<(String, f64)> {
+    let attr = |tag: &str, name: &str| tag.split_once(&format!(" {name}=\"")).and_then(|(_, rest)| rest.split_once('"')).map(|(v, _)| v.to_string());
+    xbel.split("<bookmark ")
+        .skip(1)
+        .filter_map(|chunk| {
+            let tag = format!(" {}", chunk.split('>').next()?);
+            let href = attr(&tag, "href")?.replace("&apos;", "'").replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&");
+            let path = unpercent(href.strip_prefix("file://").filter(|p| p.starts_with('/'))?);
+            let when = attr(&tag, "modified").and_then(|m| chrono::DateTime::parse_from_rfc3339(&m).ok()).map(|d| d.timestamp_millis() as f64).unwrap_or(0.0);
+            Some((path, when))
+        })
+        .collect()
+}
+
+/// Recently used files that still exist, newest first, at most 200.
+fn recent_entries(xbel: &str) -> Vec<Entry> {
+    let mut v: Vec<Entry> = parse_recent(xbel)
+        .into_iter()
+        .filter_map(|(path, mtime)| {
+            let md = std::fs::metadata(&path).ok()?;
+            let name = Path::new(&path).file_name()?.to_string_lossy().into_owned();
+            Some(Entry { name, path, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime, hidden: false, link: false, origin: None })
+        })
+        .collect();
+    v.sort_by(|a, b| b.mtime.total_cmp(&a.mtime));
+    v.truncate(200);
+    v
+}
+
+/// Home, the usual user folders that exist, the Trash and Recent lists, then drives.
 pub fn places() -> Vec<Place> {
     let mut v = Vec::new();
     if let Some(h) = home() {
@@ -261,6 +329,13 @@ pub fn places() -> Vec<Place> {
         }
     }
     if cfg!(windows) {
+        // Opens in Explorer for now (see open()); an in-app Recycle Bin listing comes later.
+        v.push(Place { name: "Recycle Bin".into(), title: "Recycle Bin (opens in Explorer)".into(), path: BIN_SHELL.into(), kind: "trash", eject: false });
+    } else {
+        v.push(Place { name: "Trash".into(), title: "Trash".into(), path: TRASH.into(), kind: "trash", eject: false });
+        v.push(Place { name: "Recent".into(), title: "Recently used files".into(), path: RECENT.into(), kind: "recent", eject: false });
+    }
+    if cfg!(windows) {
         v.push(Place { name: "This PC".into(), title: "This PC".into(), path: String::new(), kind: "computer", eject: false });
     }
     for d in drives() {
@@ -270,6 +345,9 @@ pub fn places() -> Vec<Place> {
     }
     v
 }
+
+/// Explorer's own name for the Recycle Bin folder; not a file path, so open() lets it through unchecked.
+const BIN_SHELL: &str = "shell:RecycleBinFolder";
 
 const IN_USE: &str = "it is still in use. Close anything open on it and try again.";
 
@@ -338,7 +416,7 @@ pub fn home_path() -> String {
 
 /// Opens a file or folder in the desktop's default app (the user double-clicked it, so programs run too).
 pub fn open(path: &str) -> R<()> {
-    if !Path::new(path).exists() {
+    if !Path::new(path).exists() && !(cfg!(windows) && path == BIN_SHELL) {
         return Err(format!("Not found: {path}"));
     }
     let mut cmd = if cfg!(windows) {
@@ -354,7 +432,7 @@ pub fn open(path: &str) -> R<()> {
 }
 
 /// An AppImage's private library paths must not leak into the apps it starts.
-fn clean(mut c: std::process::Command) -> std::process::Command {
+pub(crate) fn clean(mut c: std::process::Command) -> std::process::Command {
     for v in ["LD_LIBRARY_PATH", "LD_PRELOAD", "GIO_MODULE_DIR", "GDK_PIXBUF_MODULE_FILE", "GSETTINGS_SCHEMA_DIR", "PYTHONHOME", "PYTHONPATH", "PERLLIB", "QT_PLUGIN_PATH"] {
         c.env_remove(v);
     }
@@ -582,6 +660,32 @@ mod tests {
         assert_eq!(props(&s(&d.join("a"))).unwrap().size, 5);
         #[cfg(unix)]
         assert!(p.mode.is_some());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn recent_list_parses_decodes_sorts_and_skips_missing() {
+        let d = std::env::temp_dir().join(format!("ff-recent-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        for f in ["old one.txt", "Tom & Jerry's.txt"] {
+            std::fs::write(d.join(f), b"x").unwrap();
+        }
+        let dir = s(&d);
+        let xbel = format!(
+            r#"<?xml version="1.0"?><xbel version="1.0">
+  <bookmark href="file://{dir}/old%20one.txt" added="2026-01-01T00:00:00Z" modified="2026-11-01T08:00:00.123456Z" visited="2026-11-01T08:00:00Z"><info/></bookmark>
+  <bookmark href="file://{dir}/gone.txt" added="2026-01-01T00:00:00Z" modified="2026-11-03T08:00:00Z"/>
+  <bookmark href="https://example.com/a" modified="2026-11-04T08:00:00Z"/>
+  <bookmark href="file://{dir}/Tom%20&amp;%20Jerry&apos;s.txt" modified="2026-11-02T08:00:00Z"/>
+</xbel>"#
+        );
+        let parsed = parse_recent(&xbel);
+        assert_eq!(parsed.iter().map(|p| p.0.clone()).collect::<Vec<_>>(), [format!("{dir}/old one.txt"), format!("{dir}/gone.txt"), format!("{dir}/Tom & Jerry's.txt")]);
+        assert_eq!(parsed[0].1, 1_793_520_000_123.0);
+        let names: Vec<_> = recent_entries(&xbel).into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["Tom & Jerry's.txt", "old one.txt"], "newest first, missing file skipped");
+        assert_eq!(unpercent("100%.txt%2"), "100%.txt%2");
+        assert_eq!(unpercent("caf%C3%A9"), "café");
         std::fs::remove_dir_all(&d).unwrap();
     }
 

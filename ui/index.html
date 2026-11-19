@@ -10,9 +10,11 @@
 <body>
   <div id="actions" role="toolbar" aria-label="File actions">
     <button id="btn-new" aria-describedby="act-where" title="New folder in the active pane's folder (Ctrl+Shift+N)">+ New folder</button>
+    <button id="btn-newfile" aria-describedby="act-where" title="New file in the active pane's folder (Ctrl+Alt+N)">+ New file</button>
     <button id="btn-trash" aria-describedby="act-where" title="Delete (Delete key); Shift+Delete deletes permanently">Delete</button>
     <button id="btn-rename" title="Rename (F2)">Rename</button>
-    <button id="btn-undo" title="Undo the last new folder, rename, move or delete (Ctrl+Z)" disabled>Undo</button>
+    <button id="btn-undo" title="Undo the last new folder or file, rename, move, copy, extract or delete (Ctrl+Z)" disabled>Undo</button>
+    <button id="btn-redo" title="Redo what Undo just took back (Ctrl+Shift+Z or Ctrl+Y)" disabled>Redo</button>
     <span id="act-where"></span>
   </div>
   <div id="app">

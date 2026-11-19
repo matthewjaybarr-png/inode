@@ -54,6 +54,7 @@ export function kindOf(e) {
 
 // Breadcrumb segments: [{name, path}]. Windows paths start at "This PC" (the drives list, path "").
 export function crumbs(path) {
+  if (path && placeName(path)) return [{ name: placeName(path), path }];
   if (isWinPath(path)) {
     const out = [{ name: 'This PC', path: '' }];
     if (!path) return out;
@@ -107,3 +108,13 @@ export function relFolder(root, path) {
 
 // Where normal Delete sends things: the system's own bin on each platform (see ops.rs).
 export const BIN = globalThis.navigator?.userAgent?.includes('Windows') ? 'Recycle Bin' : 'Trash';
+
+// Virtual folders: lists that live at no real path (fs.rs builds them). '' is This PC on Windows.
+export const TRASH = 'trash:', RECENT = 'recent:';
+const LISTS = new Map([['', 'This PC'], [TRASH, BIN], [RECENT, 'Recent']]);
+// A list's display name; undefined for a real folder.
+export const placeName = (path) => LISTS.get(path);
+export const isFolder = (path) => !!path && !LISTS.has(path);
+
+// "pack.tar.gz" -> "pack": the folder name "Extract to folder" uses; '' when the name is not an archive we extract.
+export const archiveStem = (name) => name.match(/^(.+?)\.(zip|7z|rar|tgz|tar(\.(gz|xz|zst|bz2))?)$/i)?.[1] || '';
