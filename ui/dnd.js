@@ -127,7 +127,16 @@ export function setupDnd(app) {
     if (paths.length) drop(e.target, e, paths); // none: the native event brings them
   });
   // Leaving the window (not just moving from one element to the next).
-  addEventListener('dragleave', (e) => { if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= innerWidth || e.clientY >= innerHeight) calm(); });
-  // The native drop event arrives a moment after dragend, so the dragged paths are kept that long.
-  addEventListener('dragend', () => { const d = drag; calm(); setTimeout(() => { if (drag === d) drag = seen = null; }, 500); });
+  addEventListener('dragleave', (e) => { if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= innerWidth || e.clientY >= innerHeight) { calm(); seen = null; } });
+  // A drop normally arrives as the native event or an HTML5 `drop`. On some Wayland setups neither comes for our own
+  // rows, only dragend with the accepted effect: then the last hovered target is the drop. Esc or a release outside
+  // the window ends with effect "none" (or no hover), so nothing happens. drop() never runs twice for one release.
+  addEventListener('dragend', (e) => {
+    const d = drag, s = seen, took = e.dataTransfer?.dropEffect !== 'none';
+    calm();
+    setTimeout(() => {
+      if (drag !== d) return; // already handled by a real drop event
+      if (d && s && took) drop(s.at, s.e, d); else drag = seen = null;
+    }, 150);
+  });
 }

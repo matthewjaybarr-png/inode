@@ -58,7 +58,7 @@ button { cursor: default; background: none; border: 0; }
 .sep { color: var(--muted); padding: 0 1px; }
 .search-input::placeholder { color: var(--muted); }
 /* The folder label gives way first, so the file name stays readable. */
-.c-name .where { margin-left: 4px; color: var(--muted); font-size: .9em; min-width: 0; flex-shrink: 1000; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-name .where { margin-left: 4px; color: var(--muted); font-size: .9em; min-width: 0; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar .nav .ico { width: 15px; height: 15px; vertical-align: -2px; }
 .path-input { padding: 0 8px; outline: none; border-color: var(--accent); }
 
