@@ -1,5 +1,5 @@
 // File operations: a one-at-a-time queue with progress, in-app prompts (WebView2 ignores confirm()), and undo.
-import { formatSize, BIN } from './util.js';
+import { formatSize, BIN, TRASH, placeName, isFolder, archiveStem } from './util.js';
 
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
 const $ = (s) => document.querySelector(s);
@@ -10,7 +10,8 @@ const sameDir = (a, b) => a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/
 
 export function setupOps(app) {
   const queue = [];
-  const undo = [];
+  const undo = [], redo = [];
+  const marks = () => { $('#btn-undo').disabled = !undo.length; $('#btn-redo').disabled = !redo.length; };
   let running = null;
   let prompt = null; // { resolve, keys }
   let clip = null; // { paths, mv } from Cut/Copy
@@ -22,7 +23,7 @@ export function setupOps(app) {
     const p = running.progress, pct = p && p.total ? Math.floor((100 * p.done) / p.total) : 0;
     el.querySelector('.label').textContent = `${running.label}${p?.total ? ` · ${pct}% of ${formatSize(p.total)}` : ''}${queue.length ? ` · ${queue.length} waiting` : ''}`;
     el.querySelector('.bar i').style.width = `${pct}%`;
-    $('#btn-undo').disabled = !undo.length;
+    marks();
   };
 
   window.__TAURI__.event.listen('op-progress', (e) => { if (running) { running.progress = e.payload; paint(); } });
@@ -36,7 +37,15 @@ export function setupOps(app) {
     pump();
   }
   const enqueue = (label, run) => { queue.push({ label, run }); paint(); pump(); };
-  const pushUndo = (label, fn) => { undo.push({ label, fn }); if (undo.length > 50) undo.shift(); $('#btn-undo').disabled = false; };
+  // `again` (optional) does the operation once more and records its own undo: that is what Redo runs, passing
+  // `redone` so the rest of the redo stack is kept. Any fresh operation clears the redo stack.
+  const pushUndo = (label, fn, again, redone) => {
+    undo.push({ label, fn, again }); if (undo.length > 50) undo.shift();
+    if (!redone) redo.length = 0;
+    marks();
+  };
+  // True in a real folder. Trash, Recent and This PC are lists: there it says why the command did nothing.
+  const inFolder = (p, what) => isFolder(p.path) || (app.flash(`${placeName(p.path) ?? 'This'} is a list, not a folder: open a folder to ${what}`), false);
 
   // A bar above the status line: message plus buttons; resolves with the button's id, or null on Escape.
   function ask(message, buttons, keys = {}) {
@@ -75,11 +84,17 @@ export function setupOps(app) {
       if (!policy) return;
     }
     const verb = mv ? 'Moving' : 'Copying';
-    enqueue(`${verb} ${plural(sources.length, 'item')} to ${baseName(dest)}`, async () => {
+    const run = async (redone) => {
       const pairs = await invoke('transfer', { sources, dest, mv, policy });
       app.flash(`${mv ? 'Moved' : 'Copied'} ${plural(pairs.length, 'item')} to ${baseName(dest)}`);
-      if (mv && pairs.length) pushUndo(`move of ${plural(pairs.length, 'item')}`, () => invoke('move_back', { pairs }));
-    });
+      // Undoing a copy sends the copies to the bin (recoverable). A copy that replaced files has no undo: they are gone.
+      const back = mv ? () => invoke('move_back', { pairs }) : async () => {
+        const { failed } = await invoke('trash', { paths: pairs.map((p) => p[1]) });
+        if (failed.length) throw failed.join(' · ');
+      };
+      if (pairs.length && (mv || policy !== 'replace')) pushUndo(`${mv ? 'move' : 'copy'} of ${plural(pairs.length, 'item')}`, back, run, redone);
+    };
+    enqueue(`${verb} ${plural(sources.length, 'item')} to ${baseName(dest)}`, run);
   }
 
   const ops = {
@@ -104,6 +119,8 @@ export function setupOps(app) {
     async transfer(mv) {
       const src = app.pane(), dst = app.other();
       if (!app.state.dual || !dst?.path) return app.flash('Turn on the second pane (F3) to pick where it goes');
+      if (src.path === TRASH) return app.flash(`Restore items from the ${BIN} first (Alt+R), then copy or move them`);
+      if (!isFolder(dst.path)) return app.flash(`${placeName(dst.path)} in the other pane is a list, not a folder: open a folder there first`);
       const sources = src.targets();
       if (!sources.length) return;
       await send(sources, dst.path, mv);
@@ -114,13 +131,14 @@ export function setupOps(app) {
     clip(mv) {
       const p = app.pane(), paths = p.targets();
       if (!paths.length || !p.path) return;
+      if (p.path === TRASH) return app.flash(`Restore items from the ${BIN} first (Alt+R), then cut or copy them`);
       clip = { paths, mv };
       app.flash(`${mv ? 'Cut' : 'Copied'} ${plural(paths.length, 'item')} · Ctrl+V pastes`);
     },
 
     async paste(dest = app.pane().path) {
       if (!clip) return app.flash('Nothing to paste: Ctrl+C or Ctrl+X some items first');
-      if (!dest) return;
+      if (!isFolder(dest)) return app.flash(`${placeName(dest) ?? 'This'} is a list, not a folder: open a folder to paste into it`);
       if (clip.mv && clip.paths.every((s) => sameDir(parentOf(s), dest))) return app.flash('Already in this folder');
       const { paths, mv } = clip;
       if (mv) clip = null; // a cut pastes once, like Explorer
@@ -129,25 +147,30 @@ export function setupOps(app) {
 
     rename() {
       const p = app.pane(), e = p.rows[p.cursor];
-      if (!e || !p.path) return;
+      if (!e || !inFolder(p, 'rename things')) return;
       p.startRename(e.path, async (name) => {
         if (!name || name === e.name) return;
-        const to = await invoke('rename_path', { path: e.path, name });
-        pushUndo(`rename to ${name}`, () => invoke('rename_path', { path: to, name: e.name }));
+        const run = async (redone) => {
+          const to = await invoke('rename_path', { path: e.path, name });
+          pushUndo(`rename to ${name}`, () => invoke('rename_path', { path: to, name: e.name }), run, redone);
+          if (redone) app.flash(`Renamed ${e.name} to ${name} again`);
+          return to;
+        };
+        const to = await run();
         await p.refresh(); p.render(to);
       });
     },
 
-    // Create and name in one go. Enter (or an empty name) keeps it; Esc removes it again if still empty,
-    // so cancelling leaves nothing behind. A taken or invalid name reopens the box with what was typed.
-    async newFolder() {
-      const p = app.pane(), where = p.path;
-      if (!where) return app.flash('This PC lists drives, not a folder: open a drive or folder first, then New folder.');
+    // New folder (or file): create and name in one go. Enter (or an empty name) keeps it; Esc removes it again if
+    // still empty, so cancelling leaves nothing behind. A taken or invalid name reopens the box with what was typed.
+    async newItem(folder = true) {
+      const p = app.pane(), where = p.path, word = folder ? 'folder' : 'file';
+      if (!inFolder(p, `make a new ${word} in it`)) return;
       let cur;
-      try { cur = await invoke('new_folder', { dir: where }); } catch (err) { return app.flash(String(err)); }
+      try { cur = await invoke('new_item', { dir: where, folder }); } catch (err) { return app.flash(String(err)); }
       await p.go(where, { push: false, keep: cur });
       const cancel = async () => {
-        await invoke('remove_empty_folder', { path: cur }).then(() => app.flash('Cancelled: no new folder was made'), (err) => app.flash(String(err)));
+        await invoke('remove_empty', { path: cur }).then(() => app.flash(`Cancelled: no new ${word} was made`), (err) => app.flash(String(err)));
         await p.refresh();
       };
       const commit = async (name) => {
@@ -158,19 +181,25 @@ export function setupOps(app) {
           }
           await p.refresh(); p.render(cur);
         }
-        const made = cur;
-        pushUndo(`new folder ${baseName(made)}`, () => invoke('remove_empty_folder', { path: made }));
+        const made = cur, label = `new ${word} ${baseName(made)}`, back = () => invoke('remove_empty', { path: made });
+        const again = async () => {
+          await invoke('new_item', { dir: where, name: baseName(made), folder });
+          pushUndo(label, back, again, true);
+          app.flash(`Made ${baseName(made)} in ${where} again`);
+        };
+        pushUndo(label, back, again);
         app.flash(`Made ${baseName(made)} in ${where} · Ctrl+Z removes it while it is still empty`);
       };
       p.startRename(cur, commit, cancel);
-      app.flash(`New folder in ${where} · type a name, Enter keeps it, Esc cancels`);
+      app.flash(`New ${word} in ${where} · type a name, Enter keeps it, Esc cancels`);
     },
 
     // Normal Delete = the system bin, undoable. Where there is none (Windows network/removable drives) it asks
     // before a permanent delete, Cancel focused. Items that fail are left in place and named.
     async trash() {
       const p = app.pane(), paths = p.targets();
-      if (!p.path) return;
+      if (p.path === TRASH) return ops.purge(false);
+      if (!inFolder(p, 'delete things in it')) return;
       if (!paths.length) return app.flash('Nothing to delete: select a file or folder first');
       const what = paths.length === 1 ? `"${baseName(paths[0])}"` : plural(paths.length, 'item');
       if (!(await invoke('has_bin', { dir: p.path }).catch(() => false))) {
@@ -181,18 +210,63 @@ export function setupOps(app) {
         if (ok === 'delete') enqueue(`Deleting ${what}`, async () => { await invoke('delete_paths', { paths }); app.flash(`Deleted ${what} permanently`); });
         return;
       }
-      enqueue(`Moving ${what} to the ${BIN}`, async () => {
+      const run = async (redone) => {
         const { items, failed } = await invoke('trash', { paths });
-        if (items.length) pushUndo(`delete of ${plural(items.length, 'item')}`, () => invoke('restore', { items }));
+        if (items.length) pushUndo(`delete of ${plural(items.length, 'item')}`, () => invoke('restore', { items }), run, redone);
         const moved = items.length ? `Moved ${plural(items.length, 'item')} to the ${BIN} · Ctrl+Z puts ${items.length === 1 ? 'it' : 'them'} back` : '';
         app.flash([moved, ...failed].filter(Boolean).join(' · '));
+      };
+      enqueue(`Moving ${what} to the ${BIN}`, run);
+    },
+
+    // Trash view: put the selection (or everything) back where it came from. A name taken again comes back as "name (2)".
+    restore(all) {
+      const p = app.pane(), paths = all ? null : p.targets();
+      if (p.path !== TRASH) return app.flash(`Restore works in the ${BIN}: open it from the sidebar first`);
+      if (!p.entries.length || (paths && !paths.length)) return app.flash(`Nothing to restore: the ${BIN} is empty`);
+      const what = all ? 'everything' : plural(paths.length, 'item');
+      enqueue(`Restoring ${what} from the ${BIN}`, async () => {
+        const notes = await invoke('trash_restore', { paths });
+        app.flash([`Restored ${what}`, ...notes].join(' · '));
+      });
+    },
+
+    // Trash view: delete the selection for good, or (all) empty it. Always asks first, Cancel focused.
+    async purge(all) {
+      const p = app.pane(), paths = all ? null : p.targets();
+      if (p.path !== TRASH) return app.flash(`Open the ${BIN} from the sidebar first`);
+      if (!p.entries.length || (paths && !paths.length)) return app.flash(`The ${BIN} is already empty`);
+      const n = all ? p.entries.length : paths.length;
+      const what = n === 1 ? `"${(all ? p.entries[0] : p.entries.find((e) => e.path === paths[0]))?.name}"` : plural(n, 'item');
+      const ok = await ask(all ? `Empty the ${BIN}? This deletes ${what} permanently and cannot be undone.` : `Delete ${what} permanently from the ${BIN}? This cannot be undone.`, [
+        { id: 'delete', label: all ? `Empty ${BIN}` : 'Delete permanently', danger: true },
+        { id: null, label: 'Cancel', focus: true },
+      ]);
+      if (ok !== 'delete') return;
+      enqueue(all ? `Emptying the ${BIN}` : `Deleting ${what}`, async () => {
+        const gone = await invoke('trash_purge', { paths });
+        app.flash(`Deleted ${plural(gone, 'item')} permanently`);
+      });
+    },
+
+    // Unpacks the archive under the cursor beside itself: loose ("here") or into a folder named after it.
+    // Existing names are never overwritten (keep-both naming); Undo removes what came out while it is unchanged.
+    extract(toFolder) {
+      const p = app.pane(), e = p.rows[p.cursor], stem = e && !e.dir ? archiveStem(e.name) : '';
+      if (!inFolder(p, 'extract an archive in it')) return;
+      if (!stem) return app.flash('Extract works on an archive (.zip .7z .rar .tar .tar.gz .tgz .tar.xz .tar.zst .tar.bz2): put the cursor on one');
+      enqueue(`Extracting ${e.name}`, async () => {
+        const made = await invoke('extract', { archive: e.path, folder: toFolder ? stem : null });
+        if (made.length) pushUndo(`extract of ${e.name}`, () => invoke('undo_extract', { made }));
+        app.flash(!made.length ? `${e.name} is empty: nothing to extract` : toFolder ? `Extracted ${e.name} to folder ${baseName(made[0][0])}` : `Extracted ${plural(made.length, 'item')} from ${e.name}`);
       });
     },
 
     // Shift+Delete arms; Shift+Delete again (or the button) deletes. Cancel has focus, so a stray Enter is safe.
     async deleteForever() {
       const p = app.pane(), paths = p.targets();
-      if (!paths.length || !p.path) return;
+      if (p.path === TRASH) return ops.purge(false);
+      if (!paths.length || !inFolder(p, 'delete things in it')) return;
       const what = paths.length === 1 ? `"${baseName(paths[0])}"` : plural(paths.length, 'item');
       const ok = await ask(`Delete ${what} permanently, without the ${BIN}? This cannot be undone. Shift+Delete again confirms.`, [
         { id: 'delete', label: 'Delete permanently', danger: true },
@@ -215,30 +289,27 @@ export function setupOps(app) {
     },
 
     async undo() {
-      const u = undo.pop();
-      $('#btn-undo').disabled = !undo.length;
+      const u = undo.pop(); marks();
       if (!u) return app.flash('Nothing to undo');
       enqueue(`Undoing ${u.label}`, async () => {
         const notes = await u.fn();
+        if (u.again) { redo.push(u); marks(); }
         app.flash([`Undid ${u.label}`, ...(Array.isArray(notes) ? notes : [])].join(' · '));
       });
     },
 
-    key(e) {
-      const ctrl = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
-      if (e.key === 'F2') ops.rename();
-      else if (ctrl && e.shiftKey && k === 'n') ops.newFolder();
-      else if (e.key === 'Delete' && e.shiftKey) ops.deleteForever();
-      else if (e.key === 'Delete') ops.trash();
-      else if (ctrl && e.shiftKey && k === 'c') ops.transfer(false);
-      else if (ctrl && e.shiftKey && k === 'x') ops.transfer(true);
-      else if (ctrl && !e.shiftKey && k === 'z') ops.undo();
-      else return false;
-      return true;
+    // Does the last undone operation again; it lands back on the undo stack.
+    redo() {
+      const r = redo.pop(); marks();
+      if (!r) return app.flash('Nothing to redo');
+      enqueue(`Redoing ${r.label}`, () => r.again(true));
     },
   };
 
-  $('#btn-new').onclick = () => ops.newFolder();
+  $('#btn-new').onclick = () => ops.newItem(true);
+  $('#btn-newfile').onclick = () => ops.newItem(false);
+  $('#btn-newfile').onmousedown = (e) => e.preventDefault();
+  $('#btn-redo').onclick = () => ops.redo();
   $('#btn-rename').onclick = () => ops.rename();
   $('#btn-new').onmousedown = (e) => e.preventDefault(); // keep focus off the button so the name box keeps it
   $('#btn-copy').onclick = () => ops.transfer(false);

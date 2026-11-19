@@ -1,4 +1,4 @@
-//! File operations: copy/move between folders, rename, new folder, trash (with restore) and permanent delete.
+//! File operations: copy/move between folders, rename, new folder/file, trash (with restore), permanent delete, zip and extract.
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -216,17 +216,36 @@ pub fn rename(path: &str, name: &str) -> R<String> {
     Ok(s(&to))
 }
 
-pub fn new_folder(dir: &str) -> R<String> {
+/// Makes an empty folder or file in `dir`. Without a name it takes the first free "New folder" / "New file.txt";
+/// a given name (redo) must be free, so nothing is ever overwritten.
+pub fn make_new(dir: &str, name: Option<&str>, folder: bool) -> R<String> {
     let d = Path::new(dir);
-    let p = if d.join("New folder").symlink_metadata().is_ok() { free_name(d, "New folder", true) } else { d.join("New folder") };
-    std::fs::create_dir(&p).map_err(|e| err("Cannot create", &p, e))?;
+    let p = match name {
+        Some(n) => {
+            check_name(n)?;
+            d.join(n)
+        }
+        None => {
+            let n = if folder { "New folder" } else { "New file.txt" };
+            if d.join(n).symlink_metadata().is_ok() { free_name(d, n, folder) } else { d.join(n) }
+        }
+    };
+    let made = if folder { std::fs::create_dir(&p) } else { std::fs::OpenOptions::new().write(true).create_new(true).open(&p).map(|_| ()) };
+    made.map_err(|e| err("Cannot create", &p, e))?;
     Ok(s(&p))
 }
 
-/// Undo of "New folder": only ever removes an empty folder, so nothing added since is lost.
-pub fn remove_empty_folder(path: &str) -> R<()> {
+/// Undo of "New folder" / "New file": only ever removes an empty one, so nothing added since is lost.
+pub fn remove_empty(path: &str) -> R<()> {
     let p = Path::new(path);
     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.into());
+    let md = p.symlink_metadata().map_err(|e| err("Cannot undo the new item", p, e))?;
+    if !md.is_dir() {
+        if md.len() > 0 {
+            return Err(format!("{name} is no longer empty, so Undo left it in place"));
+        }
+        return std::fs::remove_file(p).map_err(|e| err("Cannot remove", p, e));
+    }
     let mut rd = std::fs::read_dir(p).map_err(|e| err("Cannot undo the new folder", p, e))?;
     if rd.next().is_some() {
         return Err(format!("{name} is no longer empty, so Undo left it in place"));
@@ -264,6 +283,32 @@ pub fn trash(paths: &[String]) -> TrashReport {
         }
     }
     r
+}
+
+/// The home trash's contents with their deletion times (ms since 1970).
+pub fn trash_items() -> Vec<(Trashed, f64)> {
+    platform::items()
+}
+
+/// The listed trash items stored at `stored` (None = all of them). Paths the trash does not list are
+/// ignored, so the Trash view's commands can never touch a file outside it.
+fn picked(stored: Option<&[String]>) -> Vec<Trashed> {
+    trash_items().into_iter().map(|(t, _)| t).filter(|t| stored.is_none_or(|l| l.contains(&t.stored))).collect()
+}
+
+/// Restore from the Trash view; same rules as `restore`.
+pub fn restore_stored(stored: Option<&[String]>) -> R<Vec<String>> {
+    restore(&picked(stored))
+}
+
+/// Deletes trashed items for good (None = empty the trash); returns how many went.
+pub fn purge(stored: Option<&[String]>) -> R<usize> {
+    let items = picked(stored);
+    for t in &items {
+        remove(Path::new(&t.stored))?;
+        let _ = std::fs::remove_file(&t.info);
+    }
+    Ok(items.len())
 }
 
 /// Whether normal Delete is recoverable for items in `dir`. Windows has no Recycle Bin on network,
@@ -342,11 +387,34 @@ mod platform {
     }
 
     fn home_trash() -> PathBuf {
-        std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join("Trash")
+        crate::fs::data_home().join("Trash")
+    }
+
+    /// Original path and deletion time (ms since 1970, 0 when unreadable) from a .trashinfo file.
+    fn parse_info(text: &str) -> Option<(String, f64)> {
+        let get = |key: &str| text.lines().find_map(|l| l.strip_prefix(key)).map(str::trim);
+        let when = get("DeletionDate=")
+            .and_then(|d| chrono::NaiveDateTime::parse_from_str(d, "%Y-%m-%dT%H:%M:%S").ok())
+            .and_then(|d| d.and_local_timezone(chrono::Local).earliest())
+            .map(|d| d.timestamp_millis() as f64)
+            .unwrap_or(0.0);
+        Some((crate::fs::unpercent(get("Path=")?), when))
+    }
+
+    /// Every item in the home trash that has both its .trashinfo and its file.
+    /// shortcut: .Trash-$uid folders on other drives are not listed; walk the mounts here when that is wanted.
+    pub fn items() -> Vec<(Trashed, f64)> {
+        let trash = home_trash();
+        let Ok(rd) = std::fs::read_dir(trash.join("info")) else { return Vec::new() };
+        rd.flatten()
+            .filter_map(|de| {
+                let info = de.path();
+                let stored = trash.join("files").join(info.file_name()?.to_str()?.strip_suffix(".trashinfo")?);
+                stored.symlink_metadata().ok()?;
+                let (original, when) = parse_info(&std::fs::read_to_string(&info).ok()?)?;
+                Some((Trashed { original, stored: s(&stored), info: s(&info) }, when))
+            })
+            .collect()
     }
 
     /// Top of the mount holding `p`: climb while the device stays the same.
@@ -507,6 +575,11 @@ mod platform {
         Some((String::from_utf16_lossy(&units[..end]), when))
     }
 
+    /// Not listed in the app yet: the sidebar opens Explorer's Recycle Bin instead.
+    pub fn items() -> Vec<(Trashed, f64)> {
+        Vec::new()
+    }
+
     /// The newest $R/$I pair recorded for the original path.
     pub fn find(t: &Trashed) -> R<(PathBuf, PathBuf)> {
         let root = Path::new(&t.original).components().next().map(|c| PathBuf::from(c.as_os_str()).join("\\$Recycle.Bin")).ok_or("Bad path")?;
@@ -605,6 +678,103 @@ fn zip_tree<W: Write + std::io::Seek>(zw: &mut zip::ZipWriter<W>, src: &Path, en
     }
 }
 
+/// Windows ships bsdtar as System32\tar.exe (10 version 1803 and later); the full path, so nothing else on PATH is run.
+#[cfg(windows)]
+fn tar() -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut c = std::process::Command::new(PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into())).join("System32\\tar.exe"));
+    c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    c
+}
+#[cfg(not(windows))]
+fn tar() -> std::process::Command {
+    crate::fs::clean(std::process::Command::new("bsdtar"))
+}
+
+/// One thing an extract made: its path, and a fingerprint of everything in it so undo can tell if it changed.
+pub type Made = (String, String);
+
+/// Every name, size and modified time in a tree, folded into one number.
+fn fingerprint(p: &Path) -> String {
+    use std::hash::{Hash, Hasher};
+    fn walk(p: &Path, h: &mut std::collections::hash_map::DefaultHasher) {
+        let Ok(md) = p.symlink_metadata() else { return };
+        (p.file_name(), md.len(), md.modified().ok()).hash(h);
+        if md.is_dir() {
+            let mut kids: Vec<_> = std::fs::read_dir(p).into_iter().flatten().flatten().map(|e| e.path()).collect();
+            kids.sort();
+            kids.iter().for_each(|k| walk(k, h));
+        }
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    walk(p, &mut h);
+    h.finish().to_string()
+}
+
+/// Unpacks `archive` beside itself with the system's bsdtar: into a new folder named `folder`, or (None) straight
+/// into the archive's own folder. It always unpacks into a fresh temporary folder first and then moves things into
+/// place under keep-both names, so nothing that already exists is overwritten. Returns what it made, for undo.
+pub fn extract(archive: &str, folder: Option<&str>) -> R<Vec<Made>> {
+    let src = Path::new(archive);
+    let dir = src.parent().ok_or("Cannot extract a drive root")?;
+    if let Some(f) = folder {
+        check_name(f)?;
+    }
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+    let tmp = dir.join(format!(".inode-extract-{}-{nanos}", std::process::id()));
+    std::fs::create_dir(&tmp).map_err(|e| err("Cannot create", &tmp, e))?;
+    let res = unpack(src, &tmp).and_then(|_| settle(&tmp, dir, folder));
+    let _ = std::fs::remove_dir_all(&tmp); // already moved away when a folder was asked for and all went well
+    res
+}
+
+fn unpack(src: &Path, into: &Path) -> R<()> {
+    let out = tar().arg("-xf").arg(src).arg("-C").arg(into).stdin(std::process::Stdio::null()).output().map_err(|e| {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            format!("Cannot run the archive tool: {e}")
+        } else if cfg!(windows) {
+            "Cannot extract: tar.exe is missing from Windows\\System32 (it comes with Windows 10 version 1803 and later). Nothing was extracted.".into()
+        } else {
+            "Cannot extract: bsdtar is not installed (it is in the libarchive package; libarchive-tools on Debian and Ubuntu). Nothing was extracted.".into()
+        }
+    })?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&out.stderr);
+    let why = said.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("the archive tool failed");
+    Err(format!("Cannot extract {}: {why}. Nothing was extracted.", src.file_name().unwrap_or_default().to_string_lossy()))
+}
+
+/// Moves what was unpacked into `dir`: the whole temporary folder as `folder`, or each top-level entry on its own.
+fn settle(tmp: &Path, dir: &Path, folder: Option<&str>) -> R<Vec<Made>> {
+    let mut todo = Vec::new();
+    match folder {
+        Some(f) => todo.push((tmp.to_path_buf(), f.to_string(), true)),
+        None => {
+            for e in std::fs::read_dir(tmp).map_err(|e| err("Cannot open", tmp, e))?.flatten() {
+                todo.push((e.path(), e.file_name().to_string_lossy().into_owned(), e.file_type().map(|t| t.is_dir()).unwrap_or(false)));
+            }
+            todo.sort();
+        }
+    }
+    let mut made = Vec::new();
+    for (from, name, is_dir) in todo {
+        let to = if dir.join(&name).symlink_metadata().is_ok() { free_name(dir, &name, is_dir) } else { dir.join(&name) };
+        std::fs::rename(&from, &to).map_err(|e| err("Cannot move", &from, e))?;
+        made.push((s(&to), fingerprint(&to)));
+    }
+    Ok(made)
+}
+
+/// Undo of an extract: removes exactly what it made, and only while none of it has changed.
+pub fn undo_extract(made: &[Made]) -> R<()> {
+    if let Some((p, _)) = made.iter().find(|(p, f)| fingerprint(Path::new(p)) != *f) {
+        return Err(format!("{} has changed (or is gone) since it was extracted, so Undo removed nothing", Path::new(p).file_name().unwrap_or_default().to_string_lossy()));
+    }
+    made.iter().try_for_each(|(p, _)| remove(Path::new(p)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,9 +847,9 @@ mod tests {
     #[test]
     fn rename_new_folder_delete() {
         let d = tmp("ren");
-        let f = new_folder(&s(&d)).unwrap();
+        let f = make_new(&s(&d), None, true).unwrap();
         assert!(f.ends_with("New folder"));
-        assert!(new_folder(&s(&d)).unwrap().ends_with("New folder (2)"));
+        assert!(make_new(&s(&d), None, true).unwrap().ends_with("New folder (2)"));
         let r = rename(&f, "Plans").unwrap();
         assert!(Path::new(&r).is_dir());
         assert!(rename(&r, "New folder (2)").is_err());
@@ -709,6 +879,11 @@ mod tests {
         assert!(!f.exists() && !full.exists() && Path::new(&t[0].stored).exists());
         let info = std::fs::read_to_string(&t[0].info).unwrap();
         assert!(info.contains("Path=") && info.contains("doc%201.txt") && info.contains("DeletionDate=20"), "{info}");
+        // The Trash view lists them by original name, with where they came from and when they went.
+        let listed = crate::fs::list(crate::fs::TRASH).unwrap().entries;
+        assert_eq!(listed.len(), 2);
+        let doc = listed.iter().find(|e| e.name == "doc 1.txt").unwrap();
+        assert!(doc.path == t[0].stored && doc.origin.as_deref() == Some(&*s(&f)) && doc.mtime > 1.7e12 && !doc.dir, "{doc:?}");
         // The name was taken again meanwhile: it comes back beside it, nothing overwritten.
         std::fs::write(&f, "new").unwrap();
         let notes = restore(&t).unwrap();
@@ -718,20 +893,69 @@ mod tests {
         assert!(notes.len() == 1 && notes[0].contains("doc 1 (2).txt"), "{notes:?}");
         assert!(!Path::new(&t[0].info).exists());
         assert!(restore(&t).unwrap_err().contains("no longer in the Trash"));
+        // Trash view commands: delete one for good (a path outside the trash is ignored), restore one, empty the rest.
+        let again = trash(&[s(&f), s(&full), s(&d.join("doc 1 (2).txt"))]).items;
+        assert_eq!(purge(Some(&[again[0].stored.clone(), s(&data)])).unwrap(), 1);
+        assert!(data.exists() && !Path::new(&again[0].stored).exists() && !Path::new(&again[0].info).exists());
+        assert!(restore_stored(Some(&[again[1].stored.clone()])).unwrap().is_empty());
+        assert_eq!(std::fs::read_to_string(full.join("sub/x.txt")).unwrap(), "x");
+        assert_eq!(purge(None).unwrap(), 1);
+        assert!(trash_items().is_empty() && !d.join("doc 1 (2).txt").exists());
         std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]
     fn new_folder_undo_only_when_empty() {
         let d = tmp("nf");
-        let a = new_folder(&s(&d)).unwrap();
-        remove_empty_folder(&a).unwrap();
+        let a = make_new(&s(&d), None, true).unwrap();
+        remove_empty(&a).unwrap();
         assert!(!Path::new(&a).exists());
-        let b = new_folder(&s(&d)).unwrap();
+        let b = make_new(&s(&d), None, true).unwrap();
         std::fs::write(Path::new(&b).join("work.txt"), "w").unwrap();
-        assert!(remove_empty_folder(&b).unwrap_err().contains("no longer empty"));
+        assert!(remove_empty(&b).unwrap_err().contains("no longer empty"));
         assert!(Path::new(&b).join("work.txt").exists());
         assert!(rename(&b, "x/y").is_err() && has_bin(&s(&d)));
+        // New file: same rules; a named one (redo) never lands on a taken name.
+        let f = make_new(&s(&d), None, false).unwrap();
+        assert!(f.ends_with("New file.txt") && make_new(&s(&d), None, false).unwrap().ends_with("New file (2).txt"));
+        assert!(make_new(&s(&d), Some("New file.txt"), false).is_err() && make_new(&s(&d), Some("a/b"), false).is_err());
+        remove_empty(&f).unwrap();
+        assert!(!Path::new(&f).exists());
+        let g = make_new(&s(&d), Some("notes.md"), false).unwrap();
+        std::fs::write(&g, "w").unwrap();
+        assert!(remove_empty(&g).unwrap_err().contains("no longer empty") && Path::new(&g).exists());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn extract_never_overwrites_and_undo_only_removes_unchanged() {
+        let d = tmp("extract");
+        let z = d.join("pack.zip");
+        let mut zw = zip::ZipWriter::new(std::fs::File::create(&z).unwrap());
+        for (name, text) in [("a.txt", "new"), ("sub/b.txt", "b")] {
+            zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zw.write_all(text.as_bytes()).unwrap();
+        }
+        zw.finish().unwrap();
+        let read = |p: &str| std::fs::read_to_string(d.join(p)).unwrap();
+        let clean = || std::fs::read_dir(&d).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(".inode-extract"));
+        std::fs::write(d.join("a.txt"), "mine").unwrap();
+        let here = extract(&s(&z), None).unwrap();
+        assert_eq!(here.iter().map(|m| m.0.clone()).collect::<Vec<_>>(), [s(&d.join("a (2).txt")), s(&d.join("sub"))]);
+        assert_eq!((read("a.txt"), read("a (2).txt"), read("sub/b.txt")), ("mine".into(), "new".into(), "b".into()));
+        assert!(clean(), "the temporary folder is gone");
+        // Something inside changed: undo refuses and removes nothing.
+        std::fs::write(d.join("sub/b.txt"), "edited").unwrap();
+        assert!(undo_extract(&here).unwrap_err().contains("has changed"));
+        assert!(d.join("a (2).txt").exists() && d.join("sub/b.txt").exists());
+        let (one, two) = (extract(&s(&z), Some("pack")).unwrap(), extract(&s(&z), Some("pack")).unwrap());
+        assert_eq!((one[0].0.clone(), two[0].0.clone()), (s(&d.join("pack")), s(&d.join("pack (2)"))));
+        assert_eq!(read("pack (2)/sub/b.txt"), "b");
+        undo_extract(&two).unwrap();
+        assert!(!d.join("pack (2)").exists() && d.join("pack/a.txt").exists() && z.exists());
+        std::fs::write(d.join("bad.zip"), "not an archive").unwrap();
+        assert!(extract(&s(&d.join("bad.zip")), None).unwrap_err().starts_with("Cannot extract bad.zip"));
+        assert!(clean() && extract(&s(&z), Some("a/b")).is_err());
         std::fs::remove_dir_all(&d).unwrap();
     }
 

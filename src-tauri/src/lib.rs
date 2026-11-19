@@ -204,9 +204,33 @@ async fn rename_path(path: String, name: String) -> R<String> {
     ops::rename(&path, &name)
 }
 
+/// A new empty folder or file; `name` is only given by redo (the first free "New folder" / "New file.txt" otherwise).
 #[tauri::command]
-async fn new_folder(dir: String) -> R<String> {
-    ops::new_folder(&dir)
+async fn new_item(dir: String, name: Option<String>, folder: bool) -> R<String> {
+    ops::make_new(&dir, name.as_deref(), folder)
+}
+
+/// Unpacks an archive beside itself (into `folder`, or loose when none); returns what it made, for undo_extract.
+#[tauri::command]
+async fn extract(archive: String, folder: Option<String>) -> R<Vec<ops::Made>> {
+    tauri::async_runtime::spawn_blocking(move || ops::extract(&archive, folder.as_deref())).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn undo_extract(made: Vec<ops::Made>) -> R<()> {
+    tauri::async_runtime::spawn_blocking(move || ops::undo_extract(&made)).await.map_err(|e| e.to_string())?
+}
+
+/// Trash view: put items back (no paths = all of them).
+#[tauri::command]
+async fn trash_restore(paths: Option<Vec<String>>) -> R<Vec<String>> {
+    ops::restore_stored(paths.as_deref())
+}
+
+/// Trash view: delete items for good (no paths = empty the trash).
+#[tauri::command]
+async fn trash_purge(paths: Option<Vec<String>>) -> R<usize> {
+    tauri::async_runtime::spawn_blocking(move || ops::purge(paths.as_deref())).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -220,8 +244,8 @@ async fn has_bin(dir: String) -> bool {
 }
 
 #[tauri::command]
-async fn remove_empty_folder(path: String) -> R<()> {
-    ops::remove_empty_folder(&path)
+async fn remove_empty(path: String) -> R<()> {
+    ops::remove_empty(&path)
 }
 
 #[tauri::command]
@@ -265,7 +289,7 @@ pub fn run() {
             launch(app.handle(), &std::env::args().collect::<Vec<_>>(), &cwd.to_string_lossy());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![new_window, theme_choice, set_theme_choice, list_dir, places, open_path, open_terminal, startup_path, desktop::desktop_theme, conflicts, transfer, move_back, rename_path, new_folder, trash, has_bin, remove_empty_folder, restore, delete_paths, read_text, probe, search, eject, props, apps_for, open_with, compress])
+        .invoke_handler(tauri::generate_handler![new_window, theme_choice, set_theme_choice, list_dir, places, open_path, open_terminal, startup_path, desktop::desktop_theme, conflicts, transfer, move_back, rename_path, new_item, extract, undo_extract, trash_restore, trash_purge, trash, has_bin, remove_empty, restore, delete_paths, read_text, probe, search, eject, props, apps_for, open_with, compress])
         .run(tauri::generate_context!())
         .expect("error while running Inode");
 }

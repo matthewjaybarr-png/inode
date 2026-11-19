@@ -23,6 +23,8 @@ const PATHS = {
   search: 'M10.5 4a6.5 6.5 0 1 0 0 13a6.5 6.5 0 1 0 0-13M15.5 15.5L20 20',
   drive: 'M3 13h18v6H3zM3 13l3-8h12l3 8M17 16h.01',
   eject: 'M12 5l7 8H5zM5 17h14v2H5z',
+  trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5',
+  recent: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18M12 7v5l3 2',
 };
 // Sidebar place kinds that draw like a file type.
 const PLACE = { documents: 'doc', pictures: 'image', music: 'audio', videos: 'video', pin: 'folder' };

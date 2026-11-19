@@ -80,3 +80,16 @@ test('permissions', () => {
   assert.equal(formatMode(0o755), 'rwxr-xr-x (755)');
   assert.equal(formatMode(0o640), 'rw-r----- (640)');
 });
+
+import { placeName, isFolder, archiveStem, TRASH, RECENT } from '../ui/util.js';
+test('virtual folders: named lists, not folders, one crumb', () => {
+  assert.deepEqual([placeName(TRASH), placeName(RECENT), placeName(''), placeName('/home/m')], ['Trash', 'Recent', 'This PC', undefined]);
+  assert.deepEqual([TRASH, RECENT, '', null, '/home/m', 'C:\\'].map(isFolder), [false, false, false, false, true, true]);
+  assert.deepEqual(crumbs(TRASH), [{ name: 'Trash', path: TRASH }]);
+  assert.deepEqual(crumbs(RECENT), [{ name: 'Recent', path: RECENT }]);
+});
+test('archiveStem: the folder name for the archives we extract', () => {
+  const names = ['pack.zip', 'a.b.7z', 'x.tar', 'x.tar.gz', 'x.tgz', 'x.tar.xz', 'x.tar.zst', 'x.tar.bz2', 'Old.RAR'];
+  assert.deepEqual(names.map(archiveStem), ['pack', 'a.b', 'x', 'x', 'x', 'x', 'x', 'x', 'Old']);
+  assert.deepEqual(['notes.txt', 'x.gz', '.zip', 'zip', 'a.zip.txt'].map(archiveStem), ['', '', '', '', '']);
+});

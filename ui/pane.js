@@ -1,11 +1,11 @@
 // One file pane: path bar, sortable list, its own history and cursor.
-import { sortEntries, formatSize, formatDate, kindOf, crumbs, resolveTyped, relFolder } from './util.js';
+import { sortEntries, formatSize, formatDate, kindOf, crumbs, resolveTyped, relFolder, TRASH, RECENT, placeName, isFolder } from './util.js';
 import { icon, iconFor } from './icons.js';
 
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
-const tabName = (p) => (p ? p.split(/[\\/]/).filter(Boolean).pop() || p : 'This PC');
+const tabName = (p) => placeName(p || '') ?? (p.split(/[\\/]/).filter(Boolean).pop() || p);
 const COLS = [['name', 'Name'], ['size', 'Size'], ['date', 'Modified'], ['kind', 'Type']];
 
 export class Pane {
@@ -98,7 +98,10 @@ export class Pane {
   up() { if (this.parent != null) this.go(this.parent); }
 
   render(keepPath) {
-    const { sort, hidden } = this.app.state;
+    const { hidden } = this.app.state, list = this.path === TRASH || this.path === RECENT;
+    // Recent is a history: always newest first, whatever folders are sorted by.
+    const sort = this.path === RECENT ? { key: 'date', reverse: true } : this.app.state.sort;
+    this.heads.date.firstChild.data = this.path === TRASH ? 'Deleted' : 'Modified';
     const q = this.query.toLowerCase();
     const src = !q ? this.entries : this.found ?? this.entries.filter((e) => e.name.toLowerCase().includes(q));
     this.rows = sortEntries(hidden ? src : src.filter((e) => !e.hidden), sort.key, sort.reverse);
@@ -112,7 +115,8 @@ export class Pane {
       const r = el('div', `row item${e.dir ? ' dir' : ''}${e.hidden ? ' hidden-file' : ''}${e.link ? ' link' : ''}`);
       r.setAttribute('role', 'option'); r.dataset.i = i;
       const name = el('span', 'c-name'); name.append(icon(iconFor(e.name, e.dir)), el('span', 'nm', e.name));
-      const where = q && relFolder(this.path, e.path);
+      // Trash and Recent show the folder each item came from / lives in.
+      const where = list ? (e.origin || e.path).replace(/[\\/][^\\/]*$/, '') || '/' : q && relFolder(this.path, e.path);
       if (where) { const w = el('span', 'where', where); w.title = e.path; name.append(w); }
       r.append(name, el('span', 'c-size', formatSize(e.size, e.dir)), el('span', 'c-date', formatDate(e.mtime)), el('span', 'c-kind', kindOf(e)));
       r.onmousedown = (ev) => { if (ev.button === 0) this.click(i, ev); };
@@ -126,7 +130,7 @@ export class Pane {
     });
     this.list.replaceChildren(frag);
     this.empty.hidden = this.rows.length > 0;
-    this.empty.textContent = q ? (this.searching ? 'Searching subfolders…' : `Nothing named like "${this.query}" here or in subfolders`) : this.entries.length ? 'Only hidden items here (Ctrl+H shows them)' : 'This folder is empty';
+    this.empty.textContent = q ? (this.searching ? 'Searching subfolders…' : `Nothing named like "${this.query}" here or in subfolders`) : this.entries.length ? 'Only hidden items here (Ctrl+H shows them)' : placeName(this.path) ? `${placeName(this.path)} is empty` : 'This folder is empty';
     const k = keepPath ? this.rows.findIndex((e) => e.path === keepPath) : -1;
     this.cursor = Math.max(0, Math.min(k >= 0 ? k : this.cursor, this.rows.length - 1));
     if (!keepPath && this.cursor >= this.rows.length) this.cursor = 0;
@@ -140,7 +144,7 @@ export class Pane {
   renderTabs() {
     const kids = this.tabs.map((t, i) => {
       const b = el('div', `tab${i === this.tabIdx ? ' on' : ''}`); b.setAttribute('role', 'tab');
-      b.setAttribute('aria-selected', String(i === this.tabIdx)); b.title = t.path || 'This PC';
+      b.setAttribute('aria-selected', String(i === this.tabIdx)); b.title = placeName(t.path || '') ?? t.path;
       b.append(el('span', 'tab-name', tabName(t.path)));
       if (this.tabs.length > 1) { const x = el('button', 'tab-x', '×'); x.title = 'Close tab (Ctrl+W)'; x.setAttribute('aria-label', 'Close tab'); x.onmousedown = (ev) => ev.stopPropagation(); x.onclick = () => this.closeTab(i); b.append(x); }
       b.onmousedown = (ev) => { if (ev.button === 1) { ev.preventDefault(); this.closeTab(i); } else if (ev.button === 0) this.switchTab(i); };
@@ -185,7 +189,7 @@ export class Pane {
       const b = el('button', 'crumb', c.name); b.onclick = () => this.go(c.path);
       return i ? [el('span', 'sep', '›'), b] : [b];
     }));
-    this.crumbBox.title = this.path || 'This PC';
+    this.crumbBox.title = placeName(this.path || '') ?? this.path;
     this.crumbBox.scrollLeft = this.crumbBox.scrollWidth;
   }
 
@@ -227,6 +231,7 @@ export class Pane {
   activate(i = this.cursor) {
     const e = this.rows[i];
     if (!e) return;
+    if (this.path === TRASH) return this.app.flash(`Restore "${e.name}" to open it: right-click it, or Alt+R`);
     if (e.dir) this.go(e.path);
     else invoke('open_path', { path: e.path }).catch((err) => this.app.flash(String(err)));
   }
@@ -242,7 +247,7 @@ export class Pane {
   closePath() { if (this.input.hidden) return; this.input.hidden = true; this.crumbBox.hidden = false; this.list.focus(); }
 
   openSearch() {
-    if (!this.path) return this.app.flash('Open a folder to search in it');
+    if (!isFolder(this.path)) return this.app.flash('Open a folder to search in it');
     this.closePath();
     this.find.placeholder = `Search ${tabName(this.path)} and subfolders`;
     this.crumbBox.hidden = true; this.find.hidden = false; this.find.focus(); this.find.select();
