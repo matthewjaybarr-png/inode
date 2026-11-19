@@ -1,0 +1,470 @@
+// Inode: two panes side by side, a places sidebar, keyboard-first.
+import { Pane } from './pane.js';
+import { extOf, kindOf, formatSize, formatDate, formatMode, sidebarModel, moved, BIN } from './util.js';
+import { followDesktopTheme, openThemePicker } from './theme.js';
+import { setupOps } from './ops.js';
+import { icon, iconFor } from './icons.js';
+import { ACTIONS, PRESETS, buildMap, lookup, keysFor, comboOf, label } from './keys.js';
+
+const invoke = (...a) => window.__TAURI__.core.invoke(...a);
+const $ = (s) => document.querySelector(s);
+
+const IMAGES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'avif'];
+const note = (t) => Object.assign(document.createElement('div'), { className: 'pv-note', textContent: t });
+const STORE = 'folyren-files:state';
+const TRASH_LABEL = `Delete (to ${BIN})`;
+const defaults = { sort: { key: 'name', reverse: false }, hidden: false, dual: true, split: 0.5, focus: 0, paths: [], tabs: [], pins: [], side: { hide: [], fold: ['Places', 'Drives'], v: 1 }, manage: false, preview: false, cols: {}, pvw: 320, preset: 'default', keys: {} };
+// Places and Drives start folded (a busy sidebar is hard to scan); v marks profiles that already got that default once.
+const fresh = (s) => (s.side?.v ? s : { ...s, side: { hide: s.side?.hide || [], fold: [...new Set([...(s.side?.fold || []), 'Places', 'Drives'])], v: 1 } });
+const load = () => { try { return fresh({ ...defaults, ...JSON.parse(localStorage.getItem(STORE) || '{}') }); } catch { return { ...defaults }; } };
+
+const app = {
+  state: load(),
+  panes: [],
+  home: '',
+  active: 0,
+
+  saveState() {
+    this.state.paths = this.panes.map((p) => p.path);
+    this.state.tabs = this.panes.map((p) => ({ paths: p.tabs.map((t) => t.path), idx: p.tabIdx }));
+    this.state.focus = this.active;
+    try { localStorage.setItem(STORE, JSON.stringify(this.state)); } catch { /* private mode: nothing to keep */ }
+  },
+
+  focus(side, fromEvent) {
+    if (!this.state.dual) side = 0;
+    this.active = side;
+    this.panes.forEach((p, i) => p.root.classList.toggle('active', i === side));
+    if (!fromEvent) this.panes[side].list.focus();
+    this.status(); this.saveState();
+  },
+  other() { return this.panes[1 - this.active]; },
+  pane() { return this.panes[this.active]; },
+
+  setSort(key) {
+    const s = this.state.sort;
+    this.state.sort = s.key === key ? { key, reverse: !s.reverse } : { key, reverse: false };
+    this.panes.forEach((p) => p.render(p.rows[p.cursor]?.path));
+    this.saveState();
+  },
+  toggleHidden() {
+    this.state.hidden = !this.state.hidden;
+    this.panes.forEach((p) => p.render(p.rows[p.cursor]?.path));
+    this.flash(this.state.hidden ? 'Showing hidden items' : 'Hiding hidden items');
+    this.saveState();
+  },
+  toggleDual() {
+    this.state.dual = !this.state.dual;
+    this.layout();
+    if (this.state.dual && this.panes[1].path == null) this.panes[1].go(this.panes[0].path, { push: false });
+    this.focus(this.state.dual ? this.active : 0);
+  },
+  // Left folder goes right and right goes left; focus stays on the same side.
+  async swap() {
+    const [a, b] = this.panes;
+    if (!this.state.dual || a.path == null || b.path == null) return;
+    const pa = a.path;
+    await Promise.all([a.go(b.path), b.go(pa)]);
+    this.focus(this.active);
+  },
+  layout() {
+    const m = $('#panes');
+    m.classList.toggle('single', !this.state.dual);
+    $('#btn-dual').setAttribute('aria-pressed', String(this.state.dual));
+    $('#btn-swap').disabled = !this.state.dual;
+    const f = Math.min(0.85, Math.max(0.15, this.state.split));
+    m.style.gridTemplateColumns = this.state.dual ? `minmax(0, ${f}fr) 6px minmax(0, ${1 - f}fr)` : 'minmax(0, 1fr)';
+    for (const k of ['name', 'size', 'date', 'kind']) {
+      const w = this.state.cols[k];
+      if (w) m.style.setProperty(`--w-${k}`, `${w}px`); else m.style.removeProperty(`--w-${k}`);
+    }
+    $('#preview').style.width = `${Math.min(900, Math.max(200, this.state.pvw))}px`;
+  },
+  // A drag handle: `set(width)` while dragging, `reset()` on double-click; `start()` gives the width at pointer down.
+  grip(set, start, reset, sign = 1) {
+    const g = Object.assign(document.createElement('span'), { className: 'grip', title: 'Drag to resize; double-click to reset' });
+    g.onclick = (e) => e.stopPropagation();
+    g.ondblclick = (e) => { e.stopPropagation(); reset(); this.layout(); this.saveState(); };
+    g.onpointerdown = (e) => {
+      e.stopPropagation(); e.preventDefault(); g.setPointerCapture(e.pointerId); g.classList.add('drag');
+      const x0 = e.clientX, w0 = start();
+      g.onpointermove = (ev) => { set(Math.round(w0 + sign * (ev.clientX - x0))); this.layout(); };
+      g.onpointerup = () => { g.onpointermove = null; g.classList.remove('drag'); this.saveState(); };
+    };
+    return g;
+  },
+
+  status() {
+    const p = this.pane();
+    if (!p || p.path == null) return;
+    const sel = p.selected.size, n = p.rows.length;
+    const hiddenCount = p.entries.length - (this.state.hidden ? p.entries.length : p.entries.filter((e) => !e.hidden).length);
+    $('#status-left').textContent = `${this.state.dual ? `${this.active ? 'Right' : 'Left'} pane · ` : ''}${n} item${n === 1 ? '' : 's'}${sel ? ` · ${sel} selected` : ''}${hiddenCount ? ` · ${hiddenCount} hidden` : ''}`;
+    if (!this.flashing) $('#status-right').textContent = p.path || 'This PC';
+    this.actionBar(p);
+    if (this.state.preview) { clearTimeout(this.previewT); this.previewT = setTimeout(() => this.showPreview(p.rows[p.cursor]), 120); }
+  },
+  // New folder / Delete state for the active pane. A disabled button can't show a tooltip, so the reason is spelled out beside it.
+  actionBar(p = this.pane()) {
+    const n = p.path ? p.targets().length : 0, nf = $('#btn-new'), del = $('#btn-trash');
+    nf.disabled = !p.path; del.disabled = !n;
+    del.textContent = n > 1 ? `Delete (${n})` : 'Delete';
+    del.title = n ? `Move ${n === 1 ? 'the item under the cursor' : `${n} selected items`} to the ${BIN} (Delete). Shift+Delete deletes permanently.` : 'Nothing to delete: select a file or folder first';
+    nf.title = p.path ? `New folder in ${p.path} (Ctrl+Shift+N)` : 'This PC lists drives; open a drive or folder to make a folder in it';
+    $('#act-where').textContent = p.path ? `${this.state.dual ? `${this.active ? 'Right' : 'Left'} pane: ` : ''}${p.path}${n ? ` · ${n} to delete` : ' · nothing selected'}`
+      : 'This PC: open a drive or folder to make a new folder there';
+  },
+  flash(msg) {
+    clearTimeout(this.flashing);
+    $('#status-right').textContent = msg;
+    this.flashing = setTimeout(() => { this.flashing = null; this.status(); }, 3500);
+  },
+
+  async eject(pl, btn) {
+    btn.disabled = true; this.flash(`Ejecting ${pl.name}…`);
+    const home = this.places.find((p) => p.kind === 'home')?.path || '';
+    const root = /[\\/]$/.test(pl.path) ? pl.path : `${pl.path}/`, under = (path) => path && (path === pl.path || path.toLowerCase().startsWith(root.toLowerCase()));
+    // A pane showing the drive would keep it busy; send it home first.
+    await Promise.all(this.panes.filter((p) => under(p.path)).map((p) => p.go(home)));
+    try {
+      await invoke('eject', { path: pl.path });
+      this.flash(`${pl.name} can be removed now`);
+      this.renderPlaces(await invoke('places'));
+    } catch (e) {
+      btn.disabled = false; this.flash(`Could not eject ${pl.name}: ${e}`);
+    }
+  },
+
+  renderPlaces(places = this.places) {
+    this.places = places;
+    const nav = $('#sidebar'), side = this.state.side;
+    const keep = document.activeElement?.closest?.('#sidebar') ? document.activeElement.dataset.key : null;
+    nav.replaceChildren();
+    const { groups, hidden } = sidebarModel(this.state.pins, places, side);
+    const el = (tag, cls, text) => Object.assign(document.createElement(tag), { className: cls, textContent: text });
+    const flip = (list, v) => { const i = list.indexOf(v); if (i >= 0) list.splice(i, 1); else list.push(v); this.renderPlaces(); this.saveState(); };
+    for (const g of groups) {
+      const h = el('button', 'group', g.name);
+      h.dataset.key = `g:${g.name}`; h.setAttribute('aria-expanded', String(!g.folded)); h.title = g.folded ? `Show ${g.name}` : `Fold ${g.name}`;
+      h.onclick = () => flip(side.fold, g.name);
+      nav.append(h);
+      if (g.folded) continue;
+      if (!g.items.length) nav.append(el('div', 'side-note', 'No pins yet. Right-click a folder or file and choose Pin to sidebar.'));
+      for (const pl of g.items) {
+        const row = el('div', 'side-row'), b = el('button', `place k-${pl.kind}`, pl.name), more = el('button', 'more', '⋯');
+        b.prepend(icon(pl.kind)); b.dataset.key = `${pl.kind === 'pin' ? 'p' : 'l'}:${pl.path}`; b.title = pl.title || pl.path || 'This PC';
+        b.onclick = () => { if (b.dataset.kind === 'file') return this.openPinned(pl.path, b); this.pane().go(pl.path).then(() => pl.kind !== 'computer' && b.isConnected && this.checkPin(pl.path, b, pl.title || pl.path)); this.focus(this.active); };
+        more.title = `Options for ${pl.name}`; more.setAttribute('aria-label', more.title); more.setAttribute('aria-haspopup', 'menu');
+        const menu = (at) => this.sideMenu(at, pl);
+        more.onclick = () => menu(more); row.oncontextmenu = (e) => { e.preventDefault(); menu(more); };
+        row.append(b);
+        if (pl.eject) {
+          const ej = el('button', 'eject', '');
+          ej.append(icon('eject')); ej.title = `Eject ${pl.name}`; ej.setAttribute('aria-label', ej.title);
+          ej.onclick = () => this.eject(pl, ej);
+          row.append(ej);
+        }
+        row.append(more); nav.append(row);
+        if (pl.kind === 'pin' || pl.kind === 'drive') this.checkPin(pl.path, b, b.title);
+      }
+    }
+    // Manage sidebar: always there, so what is hidden can always be found again.
+    const m = el('button', 'group manage', hidden.length ? `Manage sidebar · ${hidden.length} hidden` : 'Manage sidebar');
+    m.dataset.key = 'manage'; m.setAttribute('aria-expanded', String(this.state.manage));
+    m.onclick = () => { this.state.manage = !this.state.manage; this.renderPlaces(); this.saveState(); };
+    nav.append(m);
+    if (this.state.manage) {
+      if (!hidden.length) nav.append(el('div', 'side-note', 'Nothing is hidden. Use ⋯ or right-click on a place or drive to hide it. Hiding never disconnects anything.'));
+      for (const pl of hidden) {
+        const row = el('div', 'side-row hidden-row'), b = el('button', 'place', pl.name || 'This PC'), show = el('button', 'show', 'Show');
+        b.dataset.key = `h:${pl.path}`; b.title = `${pl.path || 'This PC'} (hidden from the sidebar; click to open it)`;
+        b.onclick = () => { this.pane().go(pl.path); this.focus(this.active); };
+        show.setAttribute('aria-label', `Show ${pl.name} in the sidebar`); show.onclick = () => flip(side.hide, pl.path);
+        row.append(b, show); nav.append(row);
+      }
+      if (hidden.length > 1) { const all = el('button', 'place show-all', 'Show all'); all.dataset.key = 'showall'; all.onclick = () => { side.hide.length = 0; this.renderPlaces(); this.saveState(); }; nav.append(all); }
+    }
+    if (keep) [...nav.querySelectorAll('[data-key]')].find((x) => x.dataset.key === keep)?.focus();
+  },
+  // A pin on a drive that is away stays in the list, marked; the check runs off the UI so a dead share cannot freeze the app.
+  checkPin(path, button, tip = path) {
+    invoke('probe', { path }).then((kind) => {
+      const ok = !!kind;
+      if (ok) button.dataset.kind = kind; // an away pin keeps its last kind, so a click still opens a file the right way
+      button.classList.toggle('file', button.dataset.kind === 'file');
+      if (button.classList.contains('k-pin')) button.querySelector('.ico')?.replaceWith(icon(button.dataset.kind === 'file' ? iconFor(path, false) : 'folder'));
+      button.classList.toggle('away', !ok);
+      button.title = ok ? tip : `${tip}\nNot reachable right now. Click to try again.`;
+    }).catch(() => {});
+  },
+  // A pinned file opens in its own app, like a double-click in the list.
+  openPinned(path, button) {
+    invoke('open_path', { path }).catch((e) => this.flash(`Could not open ${path}: ${e}`));
+    this.checkPin(path, button, path);
+  },
+  sideMenu(at, pl) {
+    const side = this.state.side, pins = this.state.pins, pin = pl.kind === 'pin', i = pins.indexOf(pl.path);
+    const act = (fn) => () => { this.closeSideMenu(); fn(); this.renderPlaces(); this.saveState(); };
+    const items = pin
+      ? [['Move up', act(() => { this.state.pins = moved(pins, pl.path, -1); }), i === 0],
+         ['Move down', act(() => { this.state.pins = moved(pins, pl.path, 1); }), i === pins.length - 1],
+         ['Try again', () => { this.closeSideMenu(); if (at.previousElementSibling?.dataset.kind !== 'file') this.pane().go(pl.path); this.renderPlaces(); }],
+         ['Unpin', () => { this.closeSideMenu(); this.togglePin(pl.path); }]]
+      : [[i >= 0 ? 'Unpin' : 'Pin to top', () => { this.closeSideMenu(); this.togglePin(pl.path); }, pl.path === ''],
+         ['Hide from sidebar', act(() => { side.hide.push(pl.path); this.flash(`${pl.name} is hidden. Manage sidebar shows it again.`); })]];
+    this.popMenu(at.getBoundingClientRect(), items, at);
+  },
+  // Right-click in a list: on an item (`entry`) or on empty space (no entry). Every item is an existing command, shown with its key.
+  entryMenu(ev, entry) {
+    const act = (id) => ACTIONS.find((a) => a.id === id);
+    const it = (text, id, off) => { const c = keysFor(act(id), this.state.preset, this.state.keys)[0]; return [text, () => { this.closeSideMenu(); act(id).run(this); }, off, c ? label(c) : '']; };
+    const pinned = (p) => this.state.pins.includes(p), two = !this.state.dual;
+    const own = (text, run, off, id) => { const c = id && keysFor(act(id), this.state.preset, this.state.keys)[0]; return [text, () => { this.closeSideMenu(); run(); }, off, c ? label(c) : '']; };
+    const here = this.pane().path, noClip = !this.ops.hasClip;
+    const items = entry
+      ? [it('Open', 'open'), !entry.dir && own('Open with…', () => this.openWith(entry.path, ev)), entry.dir && it('Open in new tab', 'openNewTab'), entry.dir && own('Open in terminal', () => this.openTerminal(entry.path)), null,
+         it('Cut', 'cut'), it('Copy', 'copy'), entry.dir && own('Paste into folder', () => this.ops.paste(entry.path), noClip), it('Copy path', 'copyPath'), null,
+         it('Copy to other pane', 'copyOther', two), it('Move to other pane', 'moveOther', two), null,
+         it('Rename', 'rename'), it('Compress to .zip', 'compress'), it(pinned(entry.path) ? 'Unpin from sidebar' : 'Pin to sidebar', 'pinItem'), it(TRASH_LABEL, 'trash'), null,
+         it(this.state.preview ? 'Hide preview' : 'Show preview', 'preview'), own('Properties', () => this.showProps(entry), false, 'properties')]
+      : [it('New folder', 'newFolder'), it('Paste', 'paste', noClip), null,
+         it('Open in terminal', 'terminal'), own('Copy folder path', () => this.copyPath([here])), it(pinned(here) ? 'Unpin this folder' : 'Pin this folder', 'pin'), null,
+         it('Show / hide hidden items', 'hidden'), it(this.state.preview ? 'Hide preview' : 'Show preview', 'preview'), it('Refresh', 'refresh'), null,
+         own('Folder properties', () => this.showProps({ name: here.split(/[\\/]/).filter(Boolean).pop() || here, path: here, dir: true }))];
+    this.popMenu({ left: ev.clientX, top: ev.clientY, bottom: ev.clientY }, items, this.pane().list);
+  },
+  // Shift+F10 / Menu key: the item menu at the cursor row (empty-space menu if the folder is empty).
+  cursorMenu() {
+    const p = this.pane(), e = p.rows[p.cursor], row = e && p.list.children[p.cursor];
+    const r = (row || p.list).getBoundingClientRect();
+    this.entryMenu({ clientX: r.left + 24, clientY: row ? r.bottom : r.top + 8 }, e || null);
+  },
+  // Linux: suggested apps, then "Choose another app…" (every app). Windows (no list): the system's Open With dialog.
+  async openWith(path, at) {
+    const run = (app) => () => { this.closeSideMenu(); invoke('open_with', { path, app }).catch((e) => this.flash(`Could not open: ${e}`)); };
+    const apps = await invoke('apps_for', { path }).catch(() => []);
+    if (!apps.length) return run(null)();
+    const r = { left: at.clientX, top: at.clientY, bottom: at.clientY }, list = this.pane().list;
+    const fits = apps.filter((a) => a.fit), all = apps.map((a) => [a.name, run(a.id)]);
+    this.popMenu(r, [...(fits.length ? fits.map((a) => [a.default ? `${a.name} (default)` : a.name, run(a.id)]) : [['No suggested apps', null, true]]), null,
+      ['Choose another app…', () => this.popMenu(r, all, list)]], list);
+  },
+  // Properties of an entry (Alt+Enter: the cursor item, else this folder). Totals a folder off the UI thread.
+  async showProps(e) {
+    const p = this.pane();
+    e ||= p.rows[p.cursor] || { name: p.path, path: p.path, dir: true };
+    const box = $('#props'), dl = box.querySelector('dl');
+    const row = (k, v) => { if (v) dl.append(Object.assign(document.createElement('dt'), { textContent: k }), Object.assign(document.createElement('dd'), { textContent: v })); };
+    const when = (ms) => (ms ? new Date(ms).toLocaleString() : '');
+    const fill = (pr) => {
+      dl.replaceChildren();
+      row('Kind', kindOf(e)); row('Location', e.path.replace(/[\\/][^\\/]*[\\/]?$/, '') || (e.path.startsWith('/') ? '/' : e.path));
+      row('Size', !pr ? 'Counting…' : pr.error || `${formatSize(pr.size)}${pr.size >= 1024 ? ` (${pr.size.toLocaleString()} bytes)` : ''}`);
+      if (e.dir && pr && !pr.error) row('Contains', `${pr.files.toLocaleString()} files, ${pr.folders.toLocaleString()} folders`);
+      row('Modified', when(pr?.mtime)); row('Created', when(pr?.ctime));
+      if (pr?.mode != null) row('Permissions', formatMode(pr.mode));
+    };
+    box.querySelector('strong').textContent = e.name;
+    box.querySelector('.props-close').onclick = () => this.hideProps();
+    box.onclick = (ev) => { if (ev.target === box) this.hideProps(); }; // a click outside the card closes it
+    fill(null); box.hidden = false; box.querySelector('.props-close').focus();
+    this.propsFor = e.path;
+    const pr = await invoke('props', { path: e.path }).catch((err) => ({ error: String(err) }));
+    if (this.propsFor === e.path && !box.hidden) fill(pr);
+  },
+  hideProps() { $('#props').hidden = true; this.propsFor = null; this.pane().list.focus(); },
+  copyPath(paths = this.pane().targets()) {
+    if (!paths.length) return;
+    const text = paths.join('\n'), done = () => this.flash(paths.length === 1 ? `Copied ${paths[0]}` : `Copied ${paths.length} paths`);
+    navigator.clipboard.writeText(text).then(done, () => {
+      // Fallback for webviews that refuse the async clipboard.
+      const t = Object.assign(document.createElement('textarea'), { value: text });
+      document.body.append(t); t.select(); const ok = document.execCommand('copy'); t.remove();
+      ok ? done() : this.flash('Could not reach the clipboard');
+      this.pane().list.focus();
+    });
+  },
+  openTerminal(dir = this.pane().path) {
+    if (dir) invoke('open_terminal', { dir }).catch((e) => this.flash(`Could not open a terminal: ${e}`));
+  },
+  // Small popup menu; items are [text, run, disabled, key], null for a separator. `back` gets focus on Escape.
+  popMenu(r, items, back) {
+    this.closeSideMenu();
+    const box = Object.assign(document.createElement('div'), { id: 'side-menu' });
+    box.setAttribute('role', 'menu');
+    for (const item of items.filter((x) => x !== false)) {
+      if (!item) { box.append(document.createElement('hr')); continue; } // null = separator
+      const [text, run, off, key] = item;
+      const b = Object.assign(document.createElement('button'), { textContent: text, disabled: !!off, onclick: run });
+      if (key) b.append(Object.assign(document.createElement('span'), { className: 'key', textContent: key }));
+      b.setAttribute('role', 'menuitem'); box.append(b);
+    }
+    box.style.left = `${Math.max(4, r.left)}px`; box.style.top = `${r.bottom + 2}px`;
+    document.body.append(box);
+    if (box.getBoundingClientRect().right > innerWidth) box.style.left = `${Math.max(4, innerWidth - box.offsetWidth - 4)}px`;
+    if (box.getBoundingClientRect().bottom > innerHeight) box.style.top = `${Math.max(4, r.top - box.offsetHeight - 2)}px`;
+    const btns = () => [...box.querySelectorAll('button:not(:disabled)')];
+    box.onkeydown = (e) => {
+      const l = btns(), n = l.indexOf(document.activeElement);
+      if (e.key === 'Escape') { this.closeSideMenu(); back.focus(); }
+      else if (e.key === 'ArrowDown') l[(n + 1) % l.length].focus();
+      else if (e.key === 'ArrowUp') l[(n - 1 + l.length) % l.length].focus();
+      else if (e.key !== 'Enter' && e.key !== ' ') return;
+      else return e.stopPropagation(); // Enter/Space press the focused item, not a pane command
+      e.preventDefault(); e.stopPropagation();
+    };
+    btns()[0]?.focus();
+    setTimeout(() => addEventListener('pointerdown', this.sideMenuOff = (e) => { if (!box.contains(e.target)) this.closeSideMenu(); }, true));
+  },
+  closeSideMenu() {
+    document.getElementById('side-menu')?.remove();
+    if (this.sideMenuOff) { removeEventListener('pointerdown', this.sideMenuOff, true); this.sideMenuOff = null; }
+  },
+  togglePin(path) {
+    if (path == null) return;
+    const pins = this.state.pins, i = pins.indexOf(path);
+    if (i >= 0) pins.splice(i, 1); else pins.push(path);
+    this.flash(i >= 0 ? 'Unpinned from the sidebar' : 'Pinned to the sidebar');
+    this.renderPlaces(); this.panes.forEach((p) => p.renderTabs()); this.saveState();
+  },
+
+  // Preview column: text, images and PDFs of the item under the cursor.
+  togglePreview() {
+    this.state.preview = !this.state.preview;
+    $('#preview').hidden = !this.state.preview;
+    $('#btn-preview').setAttribute('aria-pressed', String(this.state.preview));
+    this.saveState(); this.status();
+  },
+  async showPreview(e) {
+    const box = $('#preview-body'), head = $('#preview-head');
+    const t = ++this.previewSeq;
+    box.replaceChildren(); head.replaceChildren();
+    if (!e) { head.textContent = 'Nothing selected'; return; }
+    const h = document.createElement('div'); h.className = 'pv-name'; h.textContent = e.name;
+    const m = document.createElement('div'); m.className = 'pv-meta';
+    m.textContent = [kindOf(e), e.dir ? '' : formatSize(e.size, false), formatDate(e.mtime)].filter(Boolean).join(' · ');
+    head.append(h, m);
+    const ext = extOf(e.name);
+    const src = () => window.__TAURI__.core.convertFileSrc(e.path);
+    let node;
+    if (e.dir) {
+      const n = await invoke('list_dir', { path: e.path }).then((l) => l.entries.length, () => null);
+      node = Object.assign(document.createElement('div'), { className: 'pv-note', textContent: n == null ? 'Folder (cannot be read)' : `Folder · ${n} item${n === 1 ? '' : 's'}` });
+    } else if (IMAGES.includes(ext)) {
+      node = Object.assign(document.createElement('img'), { className: 'pv-img', src: src(), alt: e.name });
+      node.onerror = () => node.replaceWith(note('No preview for this image'));
+    } else if (ext === 'pdf') {
+      node = Object.assign(document.createElement('iframe'), { className: 'pv-pdf', src: src(), title: e.name });
+    } else {
+      const text = await invoke('read_text', { path: e.path }).catch(() => null);
+      node = text == null ? note('No preview for this kind of file') : Object.assign(document.createElement('pre'), { className: 'pv-text', textContent: text });
+    }
+    if (t === this.previewSeq) box.append(node);
+  },
+  previewSeq: 0,
+
+  // "?" sheet: every action from keys.js, grouped, with its keys; Change rebinds, Reset goes back to the preset.
+  showKeys() {
+    const sheet = $('#keys');
+    const draw = () => {
+      const body = sheet.querySelector('.keys-body'); body.replaceChildren();
+      const sel = sheet.querySelector('select'); sel.value = this.state.preset;
+      let group = null;
+      for (const a of ACTIONS) {
+        if (a.group !== group) { group = a.group; body.append(Object.assign(document.createElement('h3'), { textContent: group })); }
+        const row = document.createElement('div'); row.className = 'key-row';
+        const ks = document.createElement('span'); ks.className = 'key-chips';
+        for (const c of keysFor(a, this.state.preset, this.state.keys)) ks.append(Object.assign(document.createElement('kbd'), { textContent: label(c) }));
+        const ch = Object.assign(document.createElement('button'), { textContent: 'Change', title: `Change the key for ${a.label}` });
+        ch.onclick = () => {
+          ch.textContent = 'Press a key…'; ch.classList.add('listening');
+          const grab = (ev) => {
+            if (['Control', 'Shift', 'Alt', 'Meta'].includes(ev.key)) return;
+            ev.preventDefault(); ev.stopPropagation(); removeEventListener('keydown', grab, true);
+            if (ev.key !== 'Escape') { this.state.keys[a.id] = [comboOf(ev)]; this.rebuildKeys(); this.saveState(); }
+            draw();
+          };
+          addEventListener('keydown', grab, true);
+        };
+        row.append(Object.assign(document.createElement('span'), { className: 'key-label', textContent: a.label }), ks, ch);
+        if (this.state.keys[a.id]) {
+          const r = Object.assign(document.createElement('button'), { textContent: 'Reset', title: 'Back to the preset key' });
+          r.onclick = () => { delete this.state.keys[a.id]; this.rebuildKeys(); this.saveState(); draw(); };
+          row.append(r);
+        }
+        body.append(row);
+      }
+    };
+    sheet.querySelector('select').onchange = (ev) => { this.state.preset = ev.target.value; this.rebuildKeys(); this.saveState(); draw(); };
+    sheet.querySelector('.keys-close').onclick = () => this.hideKeys();
+    draw(); sheet.hidden = false; sheet.querySelector('.keys-close').focus();
+  },
+  hideKeys() { $('#keys').hidden = true; this.pane().list.focus(); },
+  rebuildKeys() { this.keymap = buildMap(this.state.preset in PRESETS ? this.state.preset : 'default', this.state.keys); },
+};
+window.folyrenFiles = app; // test hook for the engine checks
+
+function keydown(e) {
+  if (app.ops.promptKey(e)) return;
+  if (!$('#keys').hidden) { if (e.key === 'Escape') { e.preventDefault(); app.hideKeys(); } return; }
+  if (!$('#props').hidden) { if (e.key === 'Escape' || e.key === 'Enter') { e.preventDefault(); app.hideProps(); } return; }
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.closest?.('#side-menu')) return;
+  const a = lookup(app.keymap, e);
+  if (a) { e.preventDefault(); a.run(app, e); return; }
+  if (app.pane().key(e)) e.preventDefault();
+}
+
+function splitter() {
+  const s = $('.splitter'), m = $('#panes');
+  s.onpointerdown = (e) => {
+    s.setPointerCapture(e.pointerId);
+    const r = m.getBoundingClientRect();
+    s.onpointermove = (ev) => { app.state.split = (ev.clientX - r.left) / r.width; app.layout(); };
+    s.onpointerup = () => { s.onpointermove = null; app.saveState(); };
+  };
+  s.ondblclick = () => { app.state.split = 0.5; app.layout(); app.saveState(); };
+}
+
+async function start() {
+  followDesktopTheme(() => {});
+  app.panes = [...document.querySelectorAll('.pane')].map((el, i) => new Pane(el, app, i));
+  const [places, startPath] = await Promise.all([invoke('places'), invoke('startup_path')]);
+  app.home = places.find((p) => p.kind === 'home')?.path || '';
+  app.renderPlaces(places);
+  app.ops = setupOps(app);
+  app.rebuildKeys();
+  const sel = $('#keys select');
+  for (const [id, name] of Object.entries(PRESETS)) sel.append(new Option(name, id));
+  $('#btn-preview').onclick = () => app.togglePreview();
+  $('#btn-keys').onclick = () => app.showKeys();
+  $('#btn-theme').onclick = () => openThemePicker();
+  $('#preview').prepend(app.grip((w) => { app.state.pvw = Math.min(900, Math.max(200, w)); }, () => $('#preview').getBoundingClientRect().width, () => { app.state.pvw = 320; }, -1));
+  $('#preview').hidden = !app.state.preview; $('#btn-preview').setAttribute('aria-pressed', String(app.state.preview));
+  $('#btn-dual').onclick = () => app.toggleDual();
+  $('#btn-swap').onclick = () => app.swap();
+  app.layout(); splitter();
+  addEventListener('keydown', keydown);
+  addEventListener('blur', () => app.closeSideMenu());
+  // No browser Back/Forward/Reload menu anywhere; text fields keep theirs for cut and paste.
+  addEventListener('contextmenu', (e) => { if (!e.target.closest?.('input, textarea')) e.preventDefault(); });
+  addEventListener('focus', () => invoke('places').then((p) => app.renderPlaces(p)).catch(() => {})); // a drive may have come back
+  // A folder passed on the command line wins over the remembered left pane.
+  const fromArgs = startPath !== app.home;
+  const [a, b] = app.state.paths;
+  const left = fromArgs ? startPath : (a ?? startPath);
+  // Restore each pane's tabs; a command-line folder replaces the left pane's active tab.
+  for (const [i, pane] of app.panes.entries()) {
+    const saved = app.state.tabs[i];
+    if (saved?.paths?.length > 1) {
+      pane.tabs = saved.paths.map((path) => ({ path, back: [], fwd: [] }));
+      pane.tabIdx = Math.min(saved.idx || 0, pane.tabs.length - 1);
+      pane.back = pane.tabs[pane.tabIdx].back; pane.fwd = pane.tabs[pane.tabIdx].fwd;
+    }
+    const tabPath = pane.tabs[pane.tabIdx].path;
+    const want = i === 0 ? (fromArgs ? startPath : tabPath ?? left) : (tabPath ?? b ?? left);
+    if (!(await pane.go(want, { push: false }))) await pane.go(app.home, { push: false });
+  }
+  app.focus(fromArgs ? 0 : Math.min(app.state.focus, app.state.dual ? 1 : 0));
+}
+
+start();
