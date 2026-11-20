@@ -631,7 +631,7 @@ mod platform {
         out
     }
 
-    #[link(name = "shell32")]
+    #[link(name = "shell32", kind = "raw-dylib")] // the SDK import library does not list this export
     extern "system" {
         fn SHUpdateRecycleBinIcon();
     }
