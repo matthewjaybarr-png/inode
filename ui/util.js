@@ -183,6 +183,7 @@ const SETTINGS = {
   pvw: [Number.isFinite, 'a number', 'view options'],
   askBin: [bool, 'true or false', 'warnings'],
   warnExt: [bool, 'true or false', 'warnings'],
+  restoreTabs: [bool, 'true or false', 'view options'],
 };
 // `theme` = this app's own theme choice (null = it follows the suite / the default).
 export const exportSettings = (state, theme = null) => ({ inode: 1, settings: Object.fromEntries(Object.keys(SETTINGS).filter((k) => k in state).map((k) => [k, state[k]])), theme });
@@ -207,3 +208,81 @@ export function importSettings(text) {
   if (!said.size) return { error: 'it holds no settings' };
   return { settings, theme: j.theme, said: [...said] };
 }
+
+// Why a name cannot be used ('' = it can); the same rules as check_name in ops.rs, which still has the last word.
+export function nameError(name, win = WIN) {
+  if (!name.trim() || name === '.' || name === '..' || (win ? /[\\/:*?"<>|\0]/ : /[/\0]/).test(name)) return 'not a valid name';
+  return win && /[. ]$/.test(name) ? 'Windows names cannot end with a dot or space' : '';
+}
+
+// Bulk rename: the new name of each item ({ name, dir }), in list order. `o` = { find, replace, regex, matchCase,
+// prefix, suffix, numPos ('' | 'before' | 'after'), start, step, pad, kase ('keep' | 'lower' | 'upper' | 'title'), ext }.
+// A file's extension is left alone unless o.ext. The number goes at the very start or end, outside prefix and suffix,
+// so a prefix of " - " gives "01 - name". `others` = every name in the folder; `win` = names compare without case.
+// Returns { rows: [{ from, to, error }], error }: a row's error says why it cannot be renamed, `error` why Find is bad.
+export function bulkNames(items, o = {}, others = [], win = WIN) {
+  const fold = (s) => (win ? s.toLowerCase() : s);
+  let re = null, error = '';
+  if (o.find) {
+    try { re = new RegExp(o.regex ? o.find : o.find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), o.matchCase ? 'g' : 'gi'); }
+    catch (e) { error = `Find is not a valid regular expression: ${e.message}`; }
+  }
+  const kase = { lower: (s) => s.toLowerCase(), upper: (s) => s.toUpperCase(), title: (s) => s.toLowerCase().replace(/(^|[\s._-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase()) }[o.kase] || ((s) => s);
+  const start = Number.isFinite(parseInt(o.start, 10)) ? parseInt(o.start, 10) : 1, step = parseInt(o.step, 10) || 1;
+  const rows = items.map((it, i) => {
+    const dot = it.dir || o.ext ? -1 : it.name.lastIndexOf('.');
+    const stem = dot > 0 ? it.name.slice(0, dot) : it.name, ext = dot > 0 ? it.name.slice(dot) : '';
+    const num = o.numPos ? String(start + i * step).padStart(parseInt(o.pad, 10) || 1, '0') : '';
+    // Plain text: the replacement is taken literally ("$1" stays "$1"); a regular expression may use $1, $2 …
+    const s = re ? stem.replace(re, o.regex ? o.replace || '' : () => o.replace || '') : stem;
+    return { from: it.name, to: `${o.numPos === 'before' ? num : ''}${o.prefix || ''}${kase(s)}${o.suffix || ''}${o.numPos === 'after' ? num : ''}${ext}`, error: '' };
+  });
+  const count = new Map(), mine = new Set(items.map((it) => fold(it.name)));
+  for (const r of rows) count.set(fold(r.to), (count.get(fold(r.to)) || 0) + 1);
+  const taken = new Set(others.map(fold).filter((n) => !mine.has(n)));
+  for (const r of rows) {
+    r.error = (r.to !== r.from && nameError(r.to, win)) || (count.get(fold(r.to)) > 1 ? 'two items would get this name' : taken.has(fold(r.to)) ? 'this name is already taken here' : '');
+  }
+  return { rows, error };
+}
+
+// The order to do a bulk rename in: [from, to] steps where no step lands on a name still in use. A chain (a→b while
+// b→c) runs from its free end; a swap or a ring first parks one item on a temporary name. `taken` = names in the folder.
+export function renameSteps(rows, taken = [], win = WIN) {
+  const fold = (s) => (win ? s.toLowerCase() : s);
+  const todo = rows.filter((r) => r.from !== r.to).map((r) => [r.from, r.to]);
+  const used = new Set([...taken, ...todo.flat()].map(fold)), steps = [];
+  while (todo.length) {
+    // Free = no other waiting item still holds the target name (a case-only change holds its own).
+    const i = todo.findIndex(([f, t]) => !todo.some(([g]) => g !== f && fold(g) === fold(t)));
+    if (i >= 0) { steps.push(...todo.splice(i, 1)); continue; }
+    let tmp = `${todo[0][0]}.inode-tmp`;
+    while (used.has(fold(tmp))) tmp += '~';
+    used.add(fold(tmp)); steps.push([todo[0][0], tmp]); todo[0] = [tmp, todo[0][1]];
+  }
+  return steps;
+}
+
+// Fuzzy filter for the jump box and the command palette: keeps the items whose text holds the typed letters in order,
+// best first: a hit at the start of a word, then a hit inside a word, then scattered letters (tighter is better);
+// ties go to the shorter text, then the original order. Nothing typed = everything, as given.
+export function fuzzyRank(query, items, text = (x) => x) {
+  const q = query.trim().toLowerCase(), letters = q.replace(/\s+/g, '');
+  if (!q) return [...items];
+  const out = [];
+  items.forEach((it, n) => {
+    const t = text(it).toLowerCase(), at = t.indexOf(q);
+    let score;
+    if (at >= 0) score = at === 0 || /[^a-z0-9]/.test(t[at - 1]) ? 0 : 100 + at;
+    else {
+      let i = -1, first = -1;
+      for (const c of letters) { i = t.indexOf(c, i + 1); if (i < 0) return; if (first < 0) first = i; }
+      score = 1000 + i - first;
+    }
+    out.push([score, t.length, n, it]);
+  });
+  return out.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]).map((x) => x[3]);
+}
+
+// Recently visited folders: `path` moves to the front, each folder once, the last 200 kept.
+export const visited = (list, path) => [path, ...(list || []).filter((p) => p !== path)].slice(0, 200);

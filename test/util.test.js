@@ -165,3 +165,74 @@ test('settings export and import: round trip, partial files merge, wrong shapes 
     ['{"inode":1,"settings":{},"theme":"../x"}', /"theme"/],
   ]) { const bad = importSettings(text); assert.match(bad.error, why); assert.equal(bad.settings, undefined); }
 });
+
+// Bulk rename, fuzzy match, recents
+const { bulkNames, renameSteps, fuzzyRank, visited, nameError } = await import('../ui/util.js');
+const f = (name, dir = false) => ({ name, dir });
+const tos = (r) => r.rows.map((x) => x.to);
+
+test('bulk rename: find/replace, prefix, suffix, numbering and case leave the extension alone', () => {
+  assert.deepEqual(tos(bulkNames([f('IMG_1.JPG'), f('img_2.jpg')], { find: 'img_', replace: 'pic' }, [], false)), ['pic1.JPG', 'pic2.jpg']);
+  assert.deepEqual(tos(bulkNames([f('IMG_1.JPG')], { find: 'img_', replace: 'pic', matchCase: true }, [], false)), ['IMG_1.JPG']);
+  assert.deepEqual(tos(bulkNames([f('a.b.txt'), f('dir.d', true)], { prefix: 'x-', suffix: '-y', kase: 'upper' }, [], false)), ['x-A.B-y.txt', 'x-DIR.D-y']);
+  assert.deepEqual(tos(bulkNames([f('a.txt'), f('b.txt')], { numPos: 'before', start: 9, step: 2, pad: 3, prefix: ' - ' }, [], false)), ['009 - a.txt', '011 - b.txt']);
+  assert.deepEqual(tos(bulkNames([f('a.txt')], { numPos: 'after', suffix: '_' }, [], false)), ['a_1.txt']);
+  assert.deepEqual(tos(bulkNames([f('my old_file.TXT')], { kase: 'title' }, [], false)), ['My Old_File.TXT']);
+  assert.deepEqual(tos(bulkNames([f('a.txt')], { find: 'txt', replace: 'md', ext: true }, [], false)), ['a.md']);
+  assert.deepEqual(tos(bulkNames([f('a.txt')], { find: '.', replace: '$1' }, [], false)), ['a.txt']); // plain text: "." is a dot, not "any character"
+});
+
+test('bulk rename: regular expressions, and a bad one is reported', () => {
+  assert.deepEqual(tos(bulkNames([f('2026-11-19 scan.pdf')], { find: '^(\\d+)-(\\d+)-(\\d+)', replace: '$3.$2.$1', regex: true }, [], false)), ['19.11.2026 scan.pdf']);
+  const bad = bulkNames([f('a')], { find: '(', regex: true }, [], false);
+  assert.match(bad.error, /not a valid regular expression/);
+  assert.deepEqual(tos(bad), ['a']);
+});
+
+test('bulk rename: collisions and invalid names are marked', () => {
+  const each = bulkNames([f('a1.txt'), f('a2.txt')], { find: '\\d', replace: '', regex: true }, ['a1.txt', 'a2.txt'], false);
+  assert.deepEqual(each.rows.map((r) => !!r.error), [true, true]);
+  const taken = bulkNames([f('a.txt'), f('b.txt')], { suffix: '2' }, ['a.txt', 'b.txt', 'a2.txt'], false);
+  assert.deepEqual(taken.rows.map((r) => r.error), ['this name is already taken here', '']);
+  assert.ok(bulkNames([f('a'), f('b')], { find: 'a', replace: 'x/y' }, [], false).rows[0].error);
+  assert.ok(bulkNames([f('a')], { find: 'a', replace: '' }, [], false).rows[0].error);
+  // Windows: names that differ only by case collide and "?" is refused; Linux takes both
+  assert.ok(bulkNames([f('a'), f('b')], { find: 'b', replace: 'A' }, ['a', 'b'], true).rows[1].error);
+  assert.equal(bulkNames([f('a'), f('b')], { find: 'b', replace: 'A' }, ['a', 'b'], false).rows[1].error, '');
+  assert.ok(nameError('what?', true)); assert.equal(nameError('what?', false), '');
+  // a name freed by the same rename is not a collision
+  assert.deepEqual(bulkNames([f('a'), f('b')], { find: 'a', replace: 'c' }, ['a', 'b'], false).rows.map((r) => r.error), ['', '']);
+});
+
+// Runs the steps on a pretend folder (Map name -> content); fails if a step would land on a name in use.
+const play = (folder, steps) => { for (const [a, b] of steps) { assert.ok(folder.has(a) && !folder.has(b), `${a} -> ${b}`); folder.set(b, folder.get(a)); folder.delete(a); } return Object.fromEntries(folder); };
+
+test('bulk rename order: a swap, a chain and a ring never land on a name in use', () => {
+  const swap = renameSteps([{ from: 'a', to: 'b' }, { from: 'b', to: 'a' }], ['a', 'b'], false);
+  assert.equal(swap.length, 3);
+  assert.deepEqual(play(new Map([['a', 1], ['b', 2]]), swap), { b: 1, a: 2 });
+  const chain = renameSteps([{ from: 'a', to: 'b' }, { from: 'b', to: 'c' }, { from: 'k', to: 'k' }], ['a', 'b', 'k'], false);
+  assert.deepEqual(chain, [['b', 'c'], ['a', 'b']]);
+  const ring = renameSteps([{ from: 'p', to: 'q' }, { from: 'q', to: 'r' }, { from: 'r', to: 'p' }], ['p', 'q', 'r', 'p.inode-tmp'], false);
+  assert.deepEqual(play(new Map([['p', 1], ['q', 2], ['r', 3], ['p.inode-tmp', 0]]), ring), { 'p.inode-tmp': 0, q: 1, r: 2, p: 3 });
+  // undo = the same steps backwards
+  assert.deepEqual(play(new Map([['b', 1], ['a', 2]]), swap.map(([a, b]) => [b, a]).reverse()), { a: 1, b: 2 });
+  assert.deepEqual(renameSteps([{ from: 'a', to: 'A' }], ['a'], true), [['a', 'A']]); // Windows: a case-only change
+});
+
+test('fuzzy rank: letters in order, best matches first', () => {
+  const list = ['Documents /home/m/Documents', 'Downloads /home/m/Downloads', 'mod /srv/mod', '@docs /srv/shared/docs', 'Pictures /home/m/Pictures'];
+  assert.deepEqual(fuzzyRank('doc', list), ['@docs /srv/shared/docs', 'Documents /home/m/Documents']);
+  assert.deepEqual(fuzzyRank('dl', list), ['Downloads /home/m/Downloads']);
+  assert.equal(fuzzyRank('od', list)[0], 'mod /srv/mod'); // inside a word beats scattered letters
+  assert.deepEqual(fuzzyRank('pic', [...list, 'epic /x']), ['Pictures /home/m/Pictures', 'epic /x']); // the start of a word beats inside one
+  assert.deepEqual(fuzzyRank('zzz', list), []);
+  assert.deepEqual(fuzzyRank(' ', list), list);
+  assert.deepEqual(fuzzyRank('new fold', [{ t: 'Rename' }, { t: 'New folder' }, { t: 'New file' }], (x) => x.t), [{ t: 'New folder' }]);
+});
+
+test('recently visited: newest first, each once, capped at 200', () => {
+  assert.deepEqual(visited(['/a', '/b'], '/b'), ['/b', '/a']);
+  assert.deepEqual(visited(undefined, '/a'), ['/a']);
+  assert.equal(visited(Array.from({ length: 200 }, (_, i) => `/${i}`), '/new').length, 200);
+});

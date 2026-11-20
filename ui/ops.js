@@ -158,6 +158,7 @@ export function setupOps(app) {
     rename() {
       const p = app.pane(), e = p.rows[p.cursor];
       if (!e || !inFolder(p, 'rename things')) return;
+      if (p.selected.size > 1) return app.bulkRename(); // several selected: the panel (extras.js)
       p.startRename(e.path, async (name) => {
         if (!name || name === e.name) return;
         const ext = (n) => (extOf(n) ? `.${extOf(n)}` : 'no extension');
@@ -174,6 +175,25 @@ export function setupOps(app) {
         const to = await run();
         await p.refresh(); p.render(to);
       });
+    },
+
+    // Bulk rename: `steps` are [from, to] names inside `dir` (a path ending in its separator), ordered by renameSteps
+    // (util.js) so no step lands on a name in use. All or nothing: a step that fails puts the earlier ones back, then
+    // throws. One Undo walks the steps backwards; Redo walks them again. `n` = how many items get a new name.
+    async renameMany(dir, steps, n) {
+      const walk = async (list) => {
+        const done = [];
+        try { for (const [a, b] of list) { await invoke('rename_path', { path: dir + a, name: b }); done.push([b, a]); } } catch (err) {
+          for (const [a, b] of done.reverse()) await invoke('rename_path', { path: dir + a, name: b }).catch(() => {});
+          throw err;
+        }
+      };
+      const run = async (redone) => {
+        await walk(steps);
+        pushUndo(`rename of ${plural(n, 'item')}`, () => walk(steps.map(([a, b]) => [b, a]).reverse()), run, redone);
+        app.flash(`Renamed ${plural(n, 'item')}${redone ? ' again' : ' · Ctrl+Z puts the old names back'}`);
+      };
+      await run();
     },
 
     // New folder (or file): create and name in one go. Enter (or an empty name) keeps it; Esc removes it again if

@@ -25,6 +25,7 @@ const PATHS = {
   eject: 'M12 5l7 8H5zM5 17h14v2H5z',
   trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5',
   recent: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18M12 7v5l3 2',
+  filter: 'M4 5h16l-6 7v6l-4 2v-8z',
 };
 // Sidebar place kinds that draw like a file type.
 const PLACE = { documents: 'doc', pictures: 'image', music: 'audio', videos: 'video', pin: 'folder' };

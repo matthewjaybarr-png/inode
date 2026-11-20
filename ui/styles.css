@@ -219,3 +219,45 @@ kbd { font: 11px ui-monospace, Consolas, monospace; padding: 1px 6px; border: 1p
 .keys-card button.setting { flex: none; min-width: 56px; color: var(--text); }
 .keys-card button.setting[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
 #drag-tip { position: fixed; z-index: 60; pointer-events: none; padding: 2px 8px; border-radius: 5px; font-size: 12px; white-space: nowrap; background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); }
+
+/* "/" filter box in the pane bar: small, beside the breadcrumbs */
+.bar .filter-input { flex: 0 1 120px; min-width: 56px; }
+.filter-input::placeholder { color: var(--muted); }
+
+/* Overlays from extras.js (bulk rename, jump, command palette, quick look); they share the keys-card frame */
+.over { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .35); }
+.over .keys-card { max-width: 96vw; outline: none; }
+.over header strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.over input:not([type="checkbox"]), .over select { min-width: 0; margin: 0; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 3px 6px; }
+.over input:focus-visible, .over select:focus-visible { outline: none; border-color: var(--accent); }
+.over button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.over button:disabled, .over input:disabled { opacity: .45; }
+.over.pick { align-items: flex-start; padding-top: 12vh; }
+.pick .keys-card { width: min(600px, 92vw); max-height: 70vh; }
+.over .pick-input { margin: 10px 10px 6px; padding: 5px 8px; }
+.pick-list { flex: 1; min-height: 0; overflow: auto; padding: 0 6px; }
+.pick-row { display: flex; gap: 14px; padding: 5px 8px; border-radius: 5px; white-space: nowrap; }
+.pick-row:hover { background: var(--hover); }
+.pick-row.cursor { background: var(--accent-soft); }
+.pick-text { flex: 0 1 auto; min-width: 25%; overflow: hidden; text-overflow: ellipsis; }
+.pick-hint { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: right; color: var(--muted); font-size: 12px; }
+.pick-foot { padding: 6px 14px 8px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); }
+.look .keys-card { width: 92vw; height: 90vh; max-height: none; }
+.look-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.look-info { flex: none; max-height: 30%; overflow: auto; padding: 0 14px 10px; border-top: 1px solid var(--border); }
+.bulk .keys-card { width: min(780px, 94vw); max-height: 92vh; }
+.bulk-form { flex: none; padding: 10px 14px 2px; border-bottom: 1px solid var(--border); max-height: 50vh; overflow: auto; }
+.bulk-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 8px; }
+.bulk-field, .bulk-num, .bulk-tick { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.bulk-field { flex: 1 1 220px; }
+.bulk-field input, .bulk-field select { flex: 1; }
+.bulk-num input { width: 64px; }
+.bulk-field span, .bulk-num span { color: var(--muted); }
+.bulk-list { flex: 1; min-height: 70px; overflow: auto; padding: 6px 14px; }
+.bulk-row { display: flex; flex-wrap: wrap; gap: 2px 8px; padding: 2px 0; overflow-wrap: anywhere; }
+.bulk-old, .bulk-arrow, .bulk-row.same { color: var(--muted); }
+.bulk-row.bad .bulk-new, .bulk-why { color: var(--danger); }
+.bulk-foot { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 14px; border-top: 1px solid var(--border); }
+.bulk-foot .msg { flex: 1 1 200px; min-width: 0; color: var(--muted); }
+.over .bulk-foot button { padding: 3px 14px; font-size: 13px; }
+.over .bulk-foot button:not(.primary) { color: var(--text); }

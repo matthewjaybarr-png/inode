@@ -1,5 +1,5 @@
 // One file pane: path bar, sortable list, its own history and cursor.
-import { sortEntries, formatSize, formatDate, kindOf, crumbs, resolveTyped, expandAlias, relFolder, TRASH, RECENT, placeName, isFolder, WIN } from './util.js';
+import { sortEntries, formatSize, formatDate, kindOf, crumbs, resolveTyped, expandAlias, relFolder, TRASH, RECENT, placeName, isFolder, WIN, visited } from './util.js';
 import { icon, iconFor } from './icons.js';
 
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
@@ -17,6 +17,7 @@ export class Pane {
     this.tabs = [{ path: null, back: this.back, fwd: this.fwd }]; this.tabIdx = 0; this.closed = []; this.selected = new Set(); this.anchor = 0;
     // Search: query filters this folder at once, then `found` holds the subfolder hits once they arrive.
     this.query = ''; this.found = null; this.searching = false;
+    this.filter = ''; this.total = 0; // "/" filter: lower-case text the shown names must hold; total = rows before it
     this.build();
   }
 
@@ -62,7 +63,21 @@ export class Pane {
     // Not nav(): that hands focus back to the list, which would close the name box at once.
     this.btnAlias = el('button', 'nav', '@'); this.btnAlias.title = 'Alias this folder… (Ctrl+Shift+A): name it, then type @name in the path bar to come back';
     this.btnAlias.setAttribute('aria-label', 'Alias this folder'); this.btnAlias.onclick = () => this.askAlias();
-    bar.append(this.tag, this.btnBack, this.btnFwd, this.btnUp, this.crumbBox, this.input, this.find, this.btnFind, this.btnAlias, this.btnPin);
+    // "/" filter: hides the rows whose name does not hold the typed text, as you type. Enter keeps it, Esc clears it.
+    this.filt = el('input', 'path-input filter-input'); this.filt.hidden = true; this.filt.spellcheck = false;
+    this.filt.placeholder = 'Filter names'; this.filt.setAttribute('aria-label', 'Filter this list by name');
+    this.filt.oninput = () => this.setFilter(this.filt.value);
+    this.filt.onkeydown = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); this.closeFilter(); }
+      else if (e.key === 'Enter' || e.key === 'ArrowDown') { e.preventDefault(); this.list.focus(); }
+      e.stopPropagation();
+    };
+    this.filt.onblur = () => { if (!this.filter) this.filt.hidden = true; };
+    this.btnFilter = el('button', 'nav'); this.btnFilter.append(icon('filter'));
+    this.btnFilter.title = 'Filter this list by name as you type (/); click again or Esc to clear'; this.btnFilter.setAttribute('aria-label', 'Filter this list by name');
+    this.btnFilter.onmousedown = (e) => e.preventDefault(); // the box keeps focus, so its blur cannot close it under the click
+    this.btnFilter.onclick = () => (this.filt.hidden ? this.openFilter() : this.closeFilter());
+    bar.append(this.tag, this.btnBack, this.btnFwd, this.btnUp, this.crumbBox, this.input, this.find, this.filt, this.btnFind, this.btnFilter, this.btnAlias, this.btnPin);
 
     const head = el('div', 'head row');
     this.heads = {};
@@ -88,11 +103,13 @@ export class Pane {
     if (push && this.path != null && this.path !== listing.path) { this.back.push(this.path); this.fwd.length = 0; }
     const from = this.path;
     this.resetSearch();
+    if (listing.path !== from) this.resetFilter(); // another folder opens unfiltered; a refresh keeps the filter
     this.path = listing.path; this.parent = listing.parent; this.entries = listing.entries;
     this.tabs[this.tabIdx].path = this.path;
     this.selected.clear();
     this.render(keep ?? (from && listing.entries.some((e) => e.path === from) ? from : null));
     this.renderTabs();
+    if (isFolder(this.path)) this.app.state.recents = visited(this.app.state.recents, this.path); // for the ":" jump box
     this.app.saveState();
     return true;
   }
@@ -109,7 +126,11 @@ export class Pane {
     this.heads.date.firstChild.data = this.path === TRASH ? 'Deleted' : 'Modified';
     const q = this.query.toLowerCase();
     const src = !q ? this.entries : this.found ?? this.entries.filter((e) => e.name.toLowerCase().includes(q));
-    this.rows = sortEntries(hidden ? src : src.filter((e) => !e.hidden), sort.key, sort.reverse);
+    const shown = hidden ? src : src.filter((e) => !e.hidden), f = this.filter;
+    this.total = shown.length;
+    this.rows = sortEntries(f ? shown.filter((e) => e.name.toLowerCase().includes(f)) : shown, sort.key, sort.reverse);
+    // What the filter hides leaves the selection too, so no command can act on a row that is not shown.
+    if (f) this.selected = new Set(this.rows.filter((e) => this.selected.has(e.path)).map((e) => e.path));
     for (const [k, h] of Object.entries(this.heads)) {
       h.classList.toggle('sorted', sort.key === k);
       h.dataset.dir = sort.key === k ? (sort.reverse ? 'desc' : 'asc') : '';
@@ -140,6 +161,7 @@ export class Pane {
     this.list.replaceChildren(frag);
     this.empty.hidden = this.rows.length > 0;
     this.empty.textContent = q ? (this.searching ? 'Searching subfolders…' : `Nothing named like "${this.query}" here or in subfolders`) : this.entries.length ? 'Only hidden items here (Ctrl+H shows them)' : placeName(this.path) ? `${placeName(this.path)} is empty` : 'This folder is empty';
+    if (f && this.total) this.empty.textContent = `No name here holds "${this.filt.value}" (Esc clears the filter)`;
     const k = keepPath ? this.rows.findIndex((e) => e.path === keepPath) : -1;
     this.cursor = Math.max(0, Math.min(k >= 0 ? k : this.cursor, this.rows.length - 1));
     if (!keepPath && this.cursor >= this.rows.length) this.cursor = 0;
@@ -335,6 +357,21 @@ export class Pane {
     this.render(this.rows[this.cursor]?.path);
   }
 
+  openFilter() { this.filt.hidden = false; this.filt.focus(); this.filt.select(); }
+  setFilter(text) {
+    this.filter = text.toLowerCase();
+    this.btnFilter.classList.toggle('pinned', !!this.filter);
+    this.render(this.rows[this.cursor]?.path);
+  }
+  // Drops the filter without drawing (go() draws next).
+  resetFilter() { this.filter = ''; this.filt.value = ''; this.filt.hidden = true; this.btnFilter.classList.remove('pinned'); }
+  closeFilter() {
+    const had = this.filter;
+    this.resetFilter();
+    if (had) this.render(this.rows[this.cursor]?.path);
+    this.list.focus();
+  }
+
   // Edits the name in place; Enter or leaving the box commits, Escape cancels (calls `cancel` if given).
   // `initial` reopens the box with what was typed, after a refused name.
   startRename(path, commit, cancel, initial) {
@@ -366,6 +403,7 @@ export class Pane {
   // Type-to-jump: first row starting with the typed letters. Every other key lives in keys.js.
   key(e) {
     const k = e.key;
+    if (k === 'Escape' && this.filter) { this.closeFilter(); return true; }
     if (k === 'Escape' && this.query) { this.closeSearch(); return true; }
     if (e.ctrlKey || e.metaKey || e.altKey) return false;
     if (k.length === 1 && k !== ' ') {

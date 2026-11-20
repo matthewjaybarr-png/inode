@@ -3,6 +3,7 @@ import { Pane } from './pane.js';
 import { extOf, kindOf, formatSize, formatDate, formatMode, sidebarModel, moved, BIN, TRASH, RECENT, placeName, isFolder, archiveStem, ALIAS, exportSettings, importSettings } from './util.js';
 import { followDesktopTheme, openThemePicker } from './theme.js';
 import { setupOps } from './ops.js';
+import { setupExtras } from './extras.js';
 import { setupDnd } from './dnd.js';
 import { icon, iconFor } from './icons.js';
 import { ACTIONS, PRESETS, buildMap, lookup, keysFor, comboOf, label } from './keys.js';
@@ -14,7 +15,9 @@ const IMAGES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'avif'
 const note = (t) => Object.assign(document.createElement('div'), { className: 'pv-note', textContent: t });
 const STORE = 'folyren-files:state';
 const TRASH_LABEL = `Delete (to ${BIN})`;
-const defaults = { sort: { key: 'name', reverse: false }, hidden: false, dual: true, split: 0.5, focus: 0, paths: [], tabs: [], pins: [], side: { hide: [], fold: ['Places', 'Drives'], v: 1 }, manage: false, preview: false, cols: {}, pvw: 320, preset: 'default', keys: {}, aliases: {}, askBin: false, warnExt: true };
+const defaults = { sort: { key: 'name', reverse: false }, hidden: false, dual: true, split: 0.5, focus: 0, paths: [], tabs: [], pins: [], side: { hide: [], fold: ['Places', 'Drives'], v: 1 }, manage: false, preview: false, cols: {}, pvw: 320, preset: 'default', keys: {}, aliases: {}, askBin: false, warnExt: true, recents: [], restoreTabs: true };
+// What every window shares; the rest (tabs, layout) is each window's own. See the 'storage' listener in start().
+const SHARED = ['pins', 'side', 'keys', 'preset', 'aliases', 'recents', 'askBin', 'warnExt', 'restoreTabs'];
 // Places and Drives start folded (a busy sidebar is hard to scan); v marks profiles that already got that default once.
 const fresh = (s) => (s.side?.v ? s : { ...s, side: { hide: s.side?.hide || [], fold: [...new Set([...(s.side?.fold || []), 'Places', 'Drives'])], v: 1 } });
 const load = () => { try { return fresh({ ...defaults, ...JSON.parse(localStorage.getItem(STORE) || '{}') }); } catch { return { ...defaults }; } };
@@ -26,9 +29,12 @@ const app = {
   active: 0,
 
   saveState() {
-    this.state.paths = this.panes.map((p) => p.path);
-    this.state.tabs = this.panes.map((p) => ({ paths: p.tabs.map((t) => t.path), idx: p.tabIdx }));
-    this.state.focus = this.active;
+    // A window opened for a folder (guest) leaves the remembered tabs alone: the next plain start reopens the main window's.
+    if (!this.guest) {
+      this.state.paths = this.panes.map((p) => p.path);
+      this.state.tabs = this.panes.map((p) => ({ paths: p.tabs.map((t) => t.path), idx: p.tabIdx }));
+      this.state.focus = this.active;
+    }
     try { localStorage.setItem(STORE, JSON.stringify(this.state)); } catch { /* private mode: nothing to keep */ }
   },
 
@@ -100,7 +106,7 @@ const app = {
     if (!p || p.path == null) return;
     const sel = p.selected.size, n = p.rows.length;
     const hiddenCount = p.entries.length - (this.state.hidden ? p.entries.length : p.entries.filter((e) => !e.hidden).length);
-    $('#status-left').textContent = `${this.state.dual ? `${this.active ? 'Right' : 'Left'} pane · ` : ''}${n} item${n === 1 ? '' : 's'}${sel ? ` · ${sel} selected` : ''}${hiddenCount ? ` · ${hiddenCount} hidden` : ''}`;
+    $('#status-left').textContent = `${this.state.dual ? `${this.active ? 'Right' : 'Left'} pane · ` : ''}${p.filter ? `${n} of ${p.total} shown` : `${n} item${n === 1 ? '' : 's'}`}${sel ? ` · ${sel} selected` : ''}${hiddenCount ? ` · ${hiddenCount} hidden` : ''}`;
     if (!this.flashing) $('#status-right').textContent = placeName(p.path) ?? p.path;
     this.actionBar(p);
     if (this.state.preview) { clearTimeout(this.previewT); this.previewT = setTimeout(() => this.showPreview(p.rows[p.cursor]), 120); }
@@ -439,6 +445,11 @@ const app = {
     h.textContent = e.name;
     head.append(h);
     this.showDetails(e, head);
+    const node = await this.previewNode(e);
+    if (t === this.previewSeq) box.append(node);
+  },
+  // What shows an item: an image, a PDF frame, text, the system's thumbnail, or a note. The preview column and quick look share it.
+  async previewNode(e) {
     const ext = extOf(e.name);
     const src = () => window.__TAURI__.core.convertFileSrc(e.path);
     let node;
@@ -456,7 +467,7 @@ const app = {
       node = pic ? Object.assign(document.createElement('img'), { className: 'pv-img', src: pic, alt: e.name })
         : text == null ? note('No preview for this kind of file') : Object.assign(document.createElement('pre'), { className: 'pv-text', textContent: text });
     }
-    if (t === this.previewSeq) box.append(node);
+    return node;
   },
   previewSeq: 0,
   // The details block under the name: what the listing knows at once, then what `props` and the image itself add.
@@ -548,7 +559,9 @@ function keydown(e) {
   if (app.ops.promptKey(e)) return;
   if (!$('#keys').hidden) { if (e.key === 'Escape') { e.preventDefault(); app.hideKeys(); } return; }
   if (!$('#props').hidden) { if (e.key === 'Escape' || e.key === 'Enter') { e.preventDefault(); app.hideProps(); } return; }
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.closest?.('#side-menu')) return;
+  // An open overlay (bulk rename, jump, palette, quick look: extras.js) takes every key; Escape closes it.
+  if (app.over) { if (e.key === 'Escape') { e.preventDefault(); app.closeOver(); } else app.over.key?.(e); return; }
+  if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName) || e.target.closest?.('#side-menu')) return;
   const a = lookup(app.keymap, e);
   if (a) { e.preventDefault(); a.run(app, e); return; }
   if (app.pane().key(e)) e.preventDefault();
@@ -574,6 +587,7 @@ async function start() {
   const fromArgs = asked != null, startPath = asked ?? app.home;
   app.renderPlaces(places);
   app.ops = setupOps(app);
+  setupExtras(app);
   setupDnd(app);
   app.rebuildKeys();
   const sel = $('#keys select');
@@ -590,17 +604,37 @@ async function start() {
   addEventListener('blur', () => app.closeSideMenu());
   // No browser Back/Forward/Reload menu anywhere; text fields keep theirs for cut and paste.
   addEventListener('contextmenu', (e) => { if (!e.target.closest?.('input, textarea')) e.preventDefault(); });
+  // Several windows share the one saved state: take over what another window just saved (pins, aliases, keys, recents …),
+  // so this window's next save does not put its older copy back over it. Tabs stay the main window's own.
+  addEventListener('storage', (e) => {
+    if (e.key !== STORE || !e.newValue) return;
+    let s; try { s = JSON.parse(e.newValue); } catch { return; }
+    const drawn = () => JSON.stringify([app.state.pins, app.state.side, app.state.keys, app.state.preset]), was = drawn();
+    for (const k of [...SHARED, ...(app.guest ? ['paths', 'tabs', 'focus'] : [])]) if (k in s) app.state[k] = s[k];
+    if (drawn() !== was) { app.rebuildKeys(); app.renderPlaces(); app.panes.forEach((p) => p.renderTabs()); }
+  });
   addEventListener('focus', () => invoke('places').then((p) => app.renderPlaces(p)).catch(() => {})); // a drive may have come back
   // A folder the window was opened for wins over the remembered left pane.
-  const [a, b] = app.state.paths;
+  // Settings: "Reopen tabs from last time". Off = a plain start opens home in both panes; a window opened for a folder is as before.
+  const restore = fromArgs || app.state.restoreTabs !== false;
+  app.guest = fromArgs;
+  // A list (Trash, Recent, This PC) reopens as home.
+  const real = (path) => (path == null || isFolder(path) ? path : app.home);
+  const [a, b] = restore ? app.state.paths.map(real) : [];
   const left = fromArgs ? startPath : (a ?? startPath);
+  // A remembered tab reopens only if its folder still answers.
+  const live = (path) => (path == null || !isFolder(path) ? real(path) : invoke('probe', { path }).then((k) => (k === 'dir' ? path : null), () => null));
   // Restore each pane's tabs; a command-line folder replaces the left pane's active tab.
   for (const [i, pane] of app.panes.entries()) {
-    const saved = app.state.tabs[i];
+    const saved = restore ? app.state.tabs[i] : null;
     if (saved?.paths?.length > 1) {
-      pane.tabs = saved.paths.map((path) => ({ path, back: [], fwd: [] }));
-      pane.tabIdx = Math.min(saved.idx || 0, pane.tabs.length - 1);
-      pane.back = pane.tabs[pane.tabIdx].back; pane.fwd = pane.tabs[pane.tabIdx].fwd;
+      const paths = await Promise.all(saved.paths.map(live)), idx = Math.min(saved.idx || 0, paths.length - 1);
+      const kept = paths.map((path, n) => ({ path, n })).filter((t) => t.path != null);
+      if (kept.length) {
+        pane.tabs = kept.map(({ path }) => ({ path, back: [], fwd: [] }));
+        pane.tabIdx = Math.max(0, kept.filter((t) => t.n <= idx).length - 1); // the tab that was open, or the one before it
+        pane.back = pane.tabs[pane.tabIdx].back; pane.fwd = pane.tabs[pane.tabIdx].fwd;
+      }
     }
     const tabPath = pane.tabs[pane.tabIdx].path;
     const want = i === 0 ? (fromArgs ? startPath : tabPath ?? left) : (tabPath ?? b ?? left);
