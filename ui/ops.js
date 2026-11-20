@@ -290,6 +290,26 @@ export function setupOps(app) {
       });
     },
 
+    // A shortcut (Windows: "name - Shortcut.lnk", Linux: the symlink "Link to name") beside each selected item.
+    // Undo sends the shortcuts to the bin; the items themselves are never touched.
+    shortcut() {
+      const p = app.pane(), paths = p.targets();
+      if (!paths.length || !inFolder(p, 'make a shortcut in it')) return;
+      const run = async (redone) => {
+        const made = [];
+        try { for (const path of paths) made.push(await invoke('make_link', { path })); } finally {
+          if (made.length) {
+            pushUndo(`shortcut to ${plural(made.length, 'item')}`, async () => {
+              const { failed } = await invoke('trash', { paths: made });
+              if (failed.length) throw failed.join(' · ');
+            }, run, redone);
+          }
+        }
+        app.flash(`Made ${made.length === 1 ? baseName(made[0]) : plural(made.length, 'shortcut')} · Ctrl+Z removes ${made.length === 1 ? 'it' : 'them'}`);
+      };
+      enqueue(`Making ${plural(paths.length, 'shortcut')}`, run);
+    },
+
     // Zip the selection beside it; progress shows in the same bar as copies.
     compress(paths = app.pane().targets()) {
       if (!paths.length) return;

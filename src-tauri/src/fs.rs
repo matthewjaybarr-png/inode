@@ -224,7 +224,7 @@ pub fn list(path: &str) -> R<Listing> {
         return Ok(Listing { path: String::new(), parent: None, entries });
     }
     if path == TRASH || path == RECENT {
-        let entries = if path == TRASH { trash_entries() } else { recent_entries(&std::fs::read_to_string(data_home().join("recently-used.xbel")).unwrap_or_default()) };
+        let entries = if path == TRASH { trash_entries() } else { recent_entries(recent()) };
         return Ok(Listing { path: path.into(), parent: None, entries });
     }
     let dir = PathBuf::from(path);
@@ -260,11 +260,13 @@ fn home() -> Option<PathBuf> {
 }
 
 /// Where the desktop keeps per-user data (the Trash, the recent-files list).
+#[cfg(any(not(windows), test))]
 pub fn data_home() -> PathBuf {
     std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"))).unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 
 /// "a%20b" -> "a b" (trashinfo paths and file:// links); a stray % stays as it is.
+#[cfg(any(not(windows), test))]
 pub fn unpercent(text: &str) -> String {
     let b = text.as_bytes();
     let (mut out, mut i) = (Vec::with_capacity(b.len()), 0);
@@ -287,6 +289,7 @@ fn trash_entries() -> Vec<Entry> {
 }
 
 /// (path, modified ms) of each file:// bookmark in a recently-used.xbel, in file order.
+#[cfg(any(not(windows), test))]
 fn parse_recent(xbel: &str) -> Vec<(String, f64)> {
     let attr = |tag: &str, name: &str| tag.split_once(&format!(" {name}=\"")).and_then(|(_, rest)| rest.split_once('"')).map(|(v, _)| v.to_string());
     xbel.split("<bookmark ")
@@ -301,9 +304,36 @@ fn parse_recent(xbel: &str) -> Vec<(String, f64)> {
         .collect()
 }
 
-/// Recently used files that still exist, newest first, at most 200.
-fn recent_entries(xbel: &str) -> Vec<Entry> {
-    let mut v: Vec<Entry> = parse_recent(xbel)
+/// (path, last used ms) of what the desktop remembers as recently used: GNOME-style recently-used.xbel.
+#[cfg(not(windows))]
+fn recent() -> Vec<(String, f64)> {
+    parse_recent(&std::fs::read_to_string(data_home().join("recently-used.xbel")).unwrap_or_default())
+}
+
+/// Windows keeps one shortcut per recently used item in %APPDATA%\Microsoft\Windows\Recent; a shortcut's own
+/// modified time is when its target was last used. Only the newest 300 are resolved.
+#[cfg(windows)]
+fn recent() -> Vec<(String, f64)> {
+    let dir = PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default()).join("Microsoft\\Windows\\Recent");
+    let mut lnks: Vec<(String, f64)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|de| de.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("lnk")))
+        .filter_map(|de| Some((s(&de.path()), de.metadata().ok()?.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_millis() as f64)))
+        .collect();
+    lnks.sort_by(|a, b| b.1.total_cmp(&a.1));
+    lnks.truncate(300);
+    let (paths, times): (Vec<_>, Vec<_>) = lnks.into_iter().unzip();
+    crate::shell::win::lnk_targets(&paths).into_iter().zip(times).filter_map(|(t, when)| Some((t?, when))).collect()
+}
+
+/// Recently used items that still exist, newest first, each once, at most 200 (Windows: 100).
+// shortcut: a target on a dead network share can hold the listing up for seconds (metadata waits for the share);
+// probe those with reachable() if Recent ever feels slow at work.
+fn recent_entries(used: Vec<(String, f64)>) -> Vec<Entry> {
+    let mut seen = std::collections::HashSet::new();
+    let mut v: Vec<Entry> = used
         .into_iter()
         .filter_map(|(path, mtime)| {
             let md = std::fs::metadata(&path).ok()?;
@@ -312,7 +342,8 @@ fn recent_entries(xbel: &str) -> Vec<Entry> {
         })
         .collect();
     v.sort_by(|a, b| b.mtime.total_cmp(&a.mtime));
-    v.truncate(200);
+    v.retain(|e| seen.insert(if cfg!(windows) { e.path.to_lowercase() } else { e.path.clone() }));
+    v.truncate(if cfg!(windows) { 100 } else { 200 });
     v
 }
 
@@ -684,7 +715,7 @@ mod tests {
         let parsed = parse_recent(&xbel);
         assert_eq!(parsed.iter().map(|p| p.0.clone()).collect::<Vec<_>>(), [format!("{dir}/old one.txt"), format!("{dir}/gone.txt"), format!("{dir}/Tom & Jerry's.txt")]);
         assert_eq!(parsed[0].1, 1_793_520_000_123.0);
-        let names: Vec<_> = recent_entries(&xbel).into_iter().map(|e| e.name).collect();
+        let names: Vec<_> = recent_entries(parse_recent(&xbel)).into_iter().map(|e| e.name).collect();
         assert_eq!(names, ["Tom & Jerry's.txt", "old one.txt"], "newest first, missing file skipped");
         assert_eq!(unpercent("100%.txt%2"), "100%.txt%2");
         assert_eq!(unpercent("caf%C3%A9"), "café");

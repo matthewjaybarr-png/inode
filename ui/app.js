@@ -257,7 +257,7 @@ const app = {
       ? [it('Open', 'open'), !entry.dir && own('Open with…', () => this.openWith(entry.path, ev)), entry.dir && it('Open in new tab', 'openNewTab'), entry.dir && own('Open in terminal', () => this.openTerminal(entry.path)), null,
          it('Cut', 'cut'), it('Copy', 'copy'), entry.dir && own('Paste into folder', () => this.ops.paste(entry.path)), it('Copy path', 'copyPath'), null,
          it('Copy to other pane', 'copyOther', two), it('Move to other pane', 'moveOther', two), null,
-         it('Rename', 'rename'), it('Compress to .zip', 'compress'), !!stem && it('Extract here', 'extractHere'), !!stem && it(`Extract to folder ${stem}`, 'extractTo'), it(pinned(entry.path) ? 'Unpin from sidebar' : 'Pin to sidebar', 'pinItem'), it(TRASH_LABEL, 'trash'), null,
+         it('Rename', 'rename'), it('Create shortcut', 'shortcut'), it('Compress to .zip', 'compress'), !!stem && it('Extract here', 'extractHere'), !!stem && it(`Extract to folder ${stem}`, 'extractTo'), it(pinned(entry.path) ? 'Unpin from sidebar' : 'Pin to sidebar', 'pinItem'), it(TRASH_LABEL, 'trash'), null,
          it(this.state.preview ? 'Hide preview' : 'Show preview', 'preview'), props()]
       : [it('New folder', 'newFolder'), it('New file', 'newFile'), it('Paste', 'paste'), null,
          it('Open in terminal', 'terminal'), own('Copy folder path', () => this.copyPath([here])), it(pinned(here) ? 'Unpin this folder' : 'Pin this folder', 'pin'), null,
@@ -393,7 +393,10 @@ const app = {
       node = Object.assign(document.createElement('iframe'), { className: 'pv-pdf', src: src(), title: e.name });
     } else {
       const text = await invoke('read_text', { path: e.path }).catch(() => null);
-      node = text == null ? note('No preview for this kind of file') : Object.assign(document.createElement('pre'), { className: 'pv-text', textContent: text });
+      // Not text: what the system's own file manager shows for it (Windows: Explorer's thumbnail or icon).
+      const pic = text == null && await invoke('thumb', { path: e.path, size: 256 }).catch(() => null);
+      node = pic ? Object.assign(document.createElement('img'), { className: 'pv-img', src: pic, alt: e.name })
+        : text == null ? note('No preview for this kind of file') : Object.assign(document.createElement('pre'), { className: 'pv-text', textContent: text });
     }
     if (t === this.previewSeq) box.append(node);
   },

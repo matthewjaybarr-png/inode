@@ -1804,12 +1804,14 @@ dependencies = [
 name = "inode"
 version = "0.4.0"
 dependencies = [
+ "base64 0.23.1",
  "chrono",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",
+ "windows",
  "zbus",
  "zip",
 ]
