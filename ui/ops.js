@@ -100,7 +100,7 @@ export function setupOps(app) {
 
   const ops = {
     get prompting() { return !!prompt; },
-    send,
+    send, ask,
 
     // Keys while a prompt is up: Escape cancels, a prompt's own hotkeys answer it, Tab/Enter/Space work the buttons.
     promptKey(e) {

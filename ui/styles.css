@@ -274,3 +274,13 @@ kbd { font: 11px ui-monospace, Consolas, monospace; padding: 1px 6px; border: 1p
 .tile .rename-input { width: 100%; box-sizing: border-box; text-align: center; }
 .nav[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); }
 .item .c-created, .item .c-mode { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Linux desktop: the file chooser bar (pick.js) and the sign-in / passphrase boxes (net.js). */
+#pick-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 13px; background: var(--accent-soft); border-top: 2px solid var(--accent); }
+#pick-bar strong { flex: 0 1 auto; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#pick-bar .pick-note { color: var(--muted); }
+#pick-bar .path-input { flex: 1 1 200px; margin: 0; }
+#pick-bar select { max-width: 40%; height: 28px; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+#pick-bar button { padding: 3px 14px; border-radius: 5px; border: 1px solid var(--border); color: var(--text); background: var(--surface); }
+#pick-bar button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+body.picking #btn-dual, body.picking #btn-swap, body.picking #btn-copy, body.picking #btn-move, body.picking #status-tools .sep { display: none; }
+#prompt .path-input { flex: 0 1 240px; margin: 0; height: 26px; }

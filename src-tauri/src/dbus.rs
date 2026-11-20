@@ -34,10 +34,16 @@ impl FileManager {
 
 /// Serves the interface for as long as the app runs. No bus, or another file manager already owning the name: carry on without.
 pub fn serve(app: &AppHandle) {
+    app.manage(crate::portal::Picks::default());
     let Ok(conn) = zbus::blocking::Connection::session() else { return };
     if conn.object_server().at("/org/freedesktop/FileManager1", FileManager(app.clone())).is_ok() {
         // DoNotQueue and no ReplaceExisting: a running file manager keeps the name.
         let _ = conn.request_name_with_flags("org.freedesktop.FileManager1", zbus::fdo::RequestNameFlags::DoNotQueue.into());
+    }
+    // The file chooser portal backend (portal.rs). Owning the name changes nothing by itself:
+    // xdg-desktop-portal only calls it after `inode --picker on`.
+    if conn.object_server().at(crate::portal::PATH, crate::portal::chooser(app)).is_ok() {
+        let _ = conn.request_name_with_flags(crate::portal::NAME, zbus::fdo::RequestNameFlags::DoNotQueue.into());
     }
     app.manage(conn); // dropping the connection would end the service
 }

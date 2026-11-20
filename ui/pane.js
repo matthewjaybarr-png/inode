@@ -1,6 +1,6 @@
 // One file pane: path bar, sortable list, its own history and cursor.
 import { sortEntries, formatSize, formatDate, kindOf, crumbs, resolveTyped, expandAlias, relFolder, TRASH, RECENT, placeName, isFolder, WIN, visited } from './util.js';
-import { extOf, formatMode, formatCount, IMAGES, COLUMNS, shownCols, viewOf, remember, gridStep } from './util.js';
+import { extOf, formatMode, formatCount, IMAGES, COLUMNS, shownCols, viewOf, remember, gridStep, isAddress } from './util.js';
 import { icon, iconFor } from './icons.js';
 import { ACTIONS, keysFor, label } from './keys.js';
 
@@ -121,6 +121,7 @@ export class Pane {
   }
 
   async go(path, { push = true, keep } = {}) {
+    if (isAddress(path)) return this.app.net.open(path, this); // a server, phone or locked drive: mounted first, then opened (net.js)
     let listing;
     try { listing = await invoke('list_dir', { path }); }
     catch (err) { this.app.flash(String(err)); return false; }
@@ -157,7 +158,8 @@ export class Pane {
     const q = this.query.toLowerCase();
     const src = !q ? this.entries : this.found ?? this.entries.filter((e) => e.name.toLowerCase().includes(q));
     if (this.counted !== hidden) { this.counted = hidden; for (const e of src) delete e.items; } // the counts follow the hidden setting
-    const shown = hidden ? src : src.filter((e) => !e.hidden), f = this.filter;
+    // A file chooser (pick.js) also hides the files its file-type filter leaves out.
+    const shown = (hidden ? src : src.filter((e) => !e.hidden)).filter(this.app.pick?.shows ?? Boolean), f = this.filter;
     this.total = shown.length;
     this.rows = sortEntries(f ? shown.filter((e) => e.name.toLowerCase().includes(f)) : shown, sort.key, sort.reverse, state);
     // What the filter hides leaves the selection too, so no command can act on a row that is not shown.
@@ -386,6 +388,7 @@ export class Pane {
     if (!e) return;
     if (this.path === TRASH) return this.app.flash(`Restore "${e.name}" to open it: right-click it, or Alt+R`);
     const open = () => invoke('open_path', { path: e.path }).catch((err) => this.app.flash(String(err)));
+    if (this.app.pick && !e.dir) return this.app.pick.activate(e); // a file chooser answers with the file instead of opening it
     if (e.dir) this.go(e.path);
     // A Windows shortcut to a folder opens that folder here, not in Explorer.
     else if (WIN && /\.lnk$/i.test(e.name)) invoke('link_dir', { path: e.path }).then((dir) => (dir ? this.go(dir) : open()), open);

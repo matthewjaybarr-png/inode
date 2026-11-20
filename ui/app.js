@@ -1,12 +1,14 @@
 // Inode: two panes side by side, a places sidebar, keyboard-first.
 import { Pane } from './pane.js';
-import { extOf, kindOf, formatSize, formatDate, formatMode, sidebarModel, moved, BIN, TRASH, RECENT, placeName, isFolder, archiveStem, ALIAS, exportSettings, importSettings } from './util.js';
+import { extOf, kindOf, formatSize, formatDate, formatMode, sidebarModel, moved, BIN, TRASH, RECENT, placeName, isFolder, isAddress, archiveStem, ALIAS, exportSettings, importSettings } from './util.js';
 import { followDesktopTheme, openThemePicker } from './theme.js';
 import { setupOps } from './ops.js';
 import { setupExtras } from './extras.js';
 import { setupDnd } from './dnd.js';
 import { icon, iconFor } from './icons.js';
 import { ACTIONS, PRESETS, buildMap, lookup, keysFor, comboOf, label } from './keys.js';
+import { setupNet } from './net.js';
+import { setupPick } from './pick.js';
 
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
 const $ = (s) => document.querySelector(s);
@@ -30,6 +32,7 @@ const app = {
   active: 0,
 
   saveState() {
+    if (this.pick) return; // another app's file chooser (pick.js) leaves no trace in the saved state
     // A window opened for a folder (guest) leaves the remembered tabs alone: the next plain start reopens the main window's.
     if (!this.guest) {
       this.state.paths = this.panes.map((p) => p.path);
@@ -175,7 +178,7 @@ const app = {
       for (const pl of g.items) {
         const row = el('div', 'side-row'), b = el('button', `place k-${pl.kind}`, pl.name), more = el('button', 'more', '⋯');
         b.prepend(icon(pl.kind)); b.dataset.drop = pl.path; b.dataset.key = `${pl.kind === 'pin' ? 'p' : 'l'}:${pl.path}`; b.title = pl.title || pl.path || 'This PC';
-        b.onclick = () => { if (b.dataset.kind === 'file') return this.openPinned(pl.path, b); this.goPlace(pl.path).then(() => isFolder(pl.path) && pl.kind !== 'trash' && b.isConnected && this.checkPin(pl.path, b, pl.title || pl.path)); };
+        b.onclick = () => { if (b.dataset.kind === 'file') return this.openPinned(pl.path, b); this.goPlace(pl.path).then((ok) => { if (isFolder(pl.path) && pl.kind !== 'trash' && b.isConnected) this.checkPin(pl.path, b, pl.title || pl.path); if (ok && pl.kind === 'phone' && isFolder(pl.path) && !this.pane().entries.length) this.flash(this.net.phoneNote); }); };
         more.title = `Options for ${pl.name}`; more.setAttribute('aria-label', more.title); more.setAttribute('aria-haspopup', 'menu');
         const menu = (at) => this.sideMenu(at, pl);
         more.onclick = () => menu(more); row.oncontextmenu = (e) => { e.preventDefault(); menu(more); };
@@ -187,7 +190,7 @@ const app = {
           row.append(ej);
         }
         row.append(more); nav.append(row);
-        if (pl.kind === 'pin' || pl.kind === 'drive') this.checkPin(pl.path, b, b.title);
+        if (pl.kind === 'pin' || pl.kind === 'drive' || pl.kind === 'network') this.checkPin(pl.path, b, b.title);
       }
     }
     // Manage sidebar: always there, so what is hidden can always be found again.
@@ -211,7 +214,7 @@ const app = {
   // Opens a sidebar place in the active pane.
   async goPlace(path) {
     const done = this.pane().go(path);
-    this.focus(this.active);
+    if (!isAddress(path)) this.focus(this.active); // a server or locked drive first opens a box of its own (net.js), which keeps the focus
     return done;
   },
   goKind(kind) {
@@ -598,6 +601,10 @@ async function start() {
   app.ops = setupOps(app);
   setupExtras(app);
   setupDnd(app);
+  setupNet(app);
+  // Opened by the file chooser portal for another app's Open / Save dialog (Linux): the pick bar, and nothing saved.
+  const picking = await invoke('pick_request').catch(() => null);
+  if (picking) setupPick(app, picking);
   app.rebuildKeys();
   const sel = $('#keys select');
   for (const [id, name] of Object.entries(PRESETS)) sel.append(new Option(name, id));
@@ -650,6 +657,7 @@ async function start() {
     if (!(await pane.go(want, { push: false, keep: i === 0 ? select : null }))) await pane.go(app.home, { push: false });
   }
   app.focus(fromArgs ? 0 : Math.min(app.state.focus, app.state.dual ? 1 : 0));
+  app.pick?.focus();
 }
 
 start();

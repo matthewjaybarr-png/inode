@@ -26,6 +26,10 @@ const PATHS = {
   trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5',
   recent: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18M12 7v5l3 2',
   filter: 'M4 5h16l-6 7v6l-4 2v-8z',
+  network: 'M4 4h16v8H4zM12 12v5M5 19h14M8 8h.01',
+  connect: 'M12 5v14M5 12h14',
+  phone: 'M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2',
+  locked: 'M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3',
 };
 // Sidebar place kinds that draw like a file type.
 const PLACE = { documents: 'doc', pictures: 'image', music: 'audio', videos: 'video', pin: 'folder' };

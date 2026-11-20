@@ -2,9 +2,14 @@ mod choice;
 mod clip;
 #[cfg(target_os = "linux")]
 mod dbus;
+mod desk;
 mod desktop;
 mod fs;
+#[cfg(target_os = "linux")]
+mod mounts;
 mod ops;
+#[cfg(target_os = "linux")]
+mod portal;
 #[cfg(target_os = "linux")]
 pub mod setup;
 mod shell;
@@ -64,9 +69,10 @@ async fn dir_counts(paths: Vec<String>, hidden: bool) -> Vec<Option<u64>> {
     tauri::async_runtime::spawn_blocking(move || fs::counts(&paths, hidden)).await.unwrap_or_default()
 }
 
+/// Off the UI thread: on Linux the list asks gio and lsblk (network places, phones, locked drives).
 #[tauri::command]
-fn places() -> Vec<fs::Place> {
-    fs::places()
+async fn places() -> Vec<fs::Place> {
+    tauri::async_runtime::spawn_blocking(fs::places).await.unwrap_or_default()
 }
 
 #[tauri::command]
@@ -347,7 +353,7 @@ pub fn run() {
             launch(app.handle(), &std::env::args().collect::<Vec<_>>(), &cwd.to_string_lossy());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![new_window, theme_choice, set_theme_choice, list_dir, places, open_path, open_terminal, startup_path, desktop::desktop_theme, conflicts, transfer, move_back, rename_path, new_item, extract, undo_extract, trash_restore, trash_purge, trash, has_bin, remove_empty, restore, delete_paths, read_text, probe, search, eject, props, save_settings, apps_for, open_with, compress, clip_write, clip_read, same_device, shell::make_link, shell::link_dir, shell::thumb, shell::drag_out, dir_counts])
+        .invoke_handler(tauri::generate_handler![new_window, theme_choice, set_theme_choice, list_dir, places, open_path, open_terminal, startup_path, desktop::desktop_theme, conflicts, transfer, move_back, rename_path, new_item, extract, undo_extract, trash_restore, trash_purge, trash, has_bin, remove_empty, restore, delete_paths, read_text, probe, search, eject, props, save_settings, apps_for, open_with, compress, clip_write, clip_read, same_device, shell::make_link, shell::link_dir, shell::thumb, shell::drag_out, dir_counts, desk::pick_request, desk::pick_done, desk::connect, desk::unlock])
         .run(tauri::generate_context!())
         .expect("error while running Inode");
 }

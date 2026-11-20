@@ -105,6 +105,12 @@ export const ACTIONS = [
   { id: 'jump', group: 'Find and go', label: 'Jump to a pin, alias, place or recent folder', keys: [':'], run: (a) => a.jump() },
   { id: 'palette', group: 'Find and go', label: 'Command palette: find and run any command', keys: ['Ctrl+Shift+P'], run: (a) => a.palette() },
   { id: 'quickLook', group: 'Find and go', label: 'Quick look: large preview of the item under the cursor', keys: ['Space'], run: (a, e) => e?.repeat || a.quickLook() },
+
+  // Linux desktop: network places (net.js) and the file chooser other apps open (pick.js; these two only act in such a window).
+  { id: 'connect', group: 'Network and file chooser', label: 'Connect to server… (smb://, sftp://, ftp://, dav://)', keys: ['Ctrl+K'], run: (a) => a.pane().go('connect:') },
+  { id: 'pickAccept', group: 'Network and file chooser', label: 'File chooser: Open / Save / choose this folder', keys: ['Ctrl+Shift+Enter'], run: (a) => (a.pick ? a.pick.accept() : a.flash('That key answers a file chooser: a window Inode opens when another app asks for a file')) },
+  // Outside a file chooser Esc is what it always was: the pane's own (clear the filter or the search).
+  { id: 'pickCancel', group: 'Network and file chooser', label: 'File chooser: Cancel', keys: ['Escape'], run: (a, e) => (a.pick ? a.pick.cancel() : e?.key && a.pane().key(e)) },
 ];
 
 // "Ctrl+Shift+N", "Alt+ArrowUp", "?" … Shift is dropped for symbols (it is already in the character), kept for letters and digits.

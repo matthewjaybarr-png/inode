@@ -87,12 +87,13 @@ export function resolveTyped(text, home) {
 
 // Sidebar: what to draw. `side` = { hide: [paths], fold: [group names] }. Hiding is only a view choice:
 // a hidden place keeps working everywhere else (typed paths, This PC, pins). Pins are never hidden, only unpinned.
-const GROUP = (kind) => (kind === 'drive' || kind === 'computer' ? 'Drives' : 'Places');
+// Linux adds a Network group (mounted shares, "Connect to server…") and, under Drives, phones and locked encrypted drives.
+const GROUP = (kind) => (kind === 'network' || kind === 'connect' ? 'Network' : ['drive', 'computer', 'phone', 'locked'].includes(kind) ? 'Drives' : 'Places');
 export function sidebarModel(pins, places, side = {}) {
   const hide = new Set(side.hide || []), fold = new Set(side.fold || []);
   const groups = [
     { name: 'Pinned', items: pins.map((path) => ({ kind: 'pin', path, name: path.split(/[\\/]/).filter(Boolean).pop() || path })) },
-    ...['Places', 'Drives'].map((name) => ({ name, items: places.filter((p) => GROUP(p.kind) === name && !hide.has(p.path)) })),
+    ...['Places', 'Drives', 'Network'].map((name) => ({ name, items: places.filter((p) => GROUP(p.kind) === name && !hide.has(p.path)) })),
   ].filter((g) => g.items.length || g.name === 'Pinned').map((g) => ({ ...g, folded: fold.has(g.name) }));
   // A hidden place that is gone right now (unplugged, disconnected) stays listed, so it stays hidden when it returns.
   const known = new Map(places.map((p) => [p.path, p]));
@@ -122,7 +123,10 @@ export const TRASH = 'trash:', RECENT = 'recent:';
 const LISTS = new Map([['', 'This PC'], [TRASH, BIN], [RECENT, 'Recent']]);
 // A list's display name; undefined for a real folder.
 export const placeName = (path) => LISTS.get(path);
-export const isFolder = (path) => !!path && !LISTS.has(path);
+// Not a folder yet: a network address (smb://server/share), a locked drive (luks:/dev/sdb1) or the "Connect to
+// server…" row (connect:). Opening one mounts it first (net.js), and the folder it becomes is what a pane shows.
+export const isAddress = (path) => /^(connect:$|luks:\/|[a-z][a-z0-9+.-]+:\/\/)/i.test(path || '');
+export const isFolder = (path) => !!path && !LISTS.has(path) && !isAddress(path);
 
 // "pack.tar.gz" -> "pack": the folder name "Extract to folder" uses; '' when the name is not an archive we extract.
 export const archiveStem = (name) => name.match(/^(.+?)\.(zip|7z|rar|tgz|tar(\.(gz|xz|zst|bz2))?)$/i)?.[1] || '';

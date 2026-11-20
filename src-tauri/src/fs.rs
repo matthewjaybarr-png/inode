@@ -387,11 +387,20 @@ pub fn places() -> Vec<Place> {
     if cfg!(windows) {
         v.push(Place { name: "This PC".into(), title: "This PC".into(), path: String::new(), kind: "computer", eject: false });
     }
+    // Linux: network places, phones and locked encrypted drives (mounts.rs); a share mounted under /mnt is listed there, not twice.
+    #[cfg(target_os = "linux")]
+    let more = crate::mounts::places();
+    #[cfg(not(target_os = "linux"))]
+    let more: Vec<Place> = Vec::new();
     for d in drives() {
+        if more.iter().any(|p| p.path == d) {
+            continue;
+        }
         let (name, title) = drive_name(&d);
         let eject = removable(&d);
         v.push(Place { name, title, path: d, kind: "drive", eject });
     }
+    v.extend(more);
     v
 }
 
@@ -413,6 +422,11 @@ fn removable(d: &str) -> bool {
 /// Unmounts a removable drive so it can be pulled out, then powers it off. udisks needs no root.
 #[cfg(not(windows))]
 pub fn eject(path: &str) -> R<()> {
+    // Network places, phones and FUSE mounts are not udisks' to unmount.
+    #[cfg(target_os = "linux")]
+    if let Some(done) = crate::mounts::eject(path) {
+        return done;
+    }
     let mounts = std::fs::read_to_string("/proc/mounts").map_err(|e| e.to_string())?;
     let dev = mounts
         .lines()
@@ -429,6 +443,15 @@ pub fn eject(path: &str) -> R<()> {
         if o.status.success() { Ok(()) } else if err.contains("DeviceBusy") { Err(IN_USE.into()) } else { Err(err.trim().rsplit(": ").next().unwrap_or("").to_string()) }
     };
     run(&["unmount", "--no-user-interaction", "-b", &dev])?;
+    // An unlocked encrypted drive is locked again; the disk to power off is the one under it.
+    #[cfg(target_os = "linux")]
+    let dev = match crate::mounts::luks_parent(Path::new("/sys/class/block"), &dev) {
+        Some(under) => {
+            run(&["lock", "--no-user-interaction", "-b", &under])?;
+            under
+        }
+        None => dev,
+    };
     // Card readers and some hubs refuse power-off; once unmounted the drive is already safe to pull.
     let _ = run(&["power-off", "--no-user-interaction", "-b", &dev]);
     Ok(())
