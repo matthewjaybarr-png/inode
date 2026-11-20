@@ -1,5 +1,5 @@
 // One file pane: path bar, sortable list, its own history and cursor.
-import { sortEntries, formatSize, formatDate, kindOf, crumbs, resolveTyped, relFolder, TRASH, RECENT, placeName, isFolder, WIN } from './util.js';
+import { sortEntries, formatSize, formatDate, kindOf, crumbs, resolveTyped, expandAlias, relFolder, TRASH, RECENT, placeName, isFolder, WIN } from './util.js';
 import { icon, iconFor } from './icons.js';
 
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
@@ -39,6 +39,8 @@ export class Pane {
       e.stopPropagation();
     };
     this.input.onblur = () => this.closePath();
+    // Typing "@" names the aliases that fit, in the status bar (the Settings ? sheet lists them all).
+    this.input.oninput = () => { const v = this.input.value.trim(); if (!this.aliasing && /^@[^\\/]*$/.test(v)) this.app.flash(this.app.aliasHint(v.slice(1))); };
     // Which side this is; clicking it takes control of this pane.
     this.tag = el('button', 'side-tag', this.side ? 'R' : 'L');
     this.tag.title = `${this.side ? 'Right' : 'Left'} pane (Ctrl+${this.side ? 'Right' : 'Left'}; Tab switches)`;
@@ -57,7 +59,10 @@ export class Pane {
     this.btnFind.title = 'Search this folder and its subfolders (Ctrl+F)'; this.btnFind.setAttribute('aria-label', 'Search');
     this.btnFind.onclick = () => (this.find.hidden ? this.openSearch() : this.closeSearch());
     this.btnPin = nav('Pin this folder to the sidebar (Ctrl+D)', '☆', () => this.app.togglePin(this.path));
-    bar.append(this.tag, this.btnBack, this.btnFwd, this.btnUp, this.crumbBox, this.input, this.find, this.btnFind, this.btnPin);
+    // Not nav(): that hands focus back to the list, which would close the name box at once.
+    this.btnAlias = el('button', 'nav', '@'); this.btnAlias.title = 'Alias this folder… (Ctrl+Shift+A): name it, then type @name in the path bar to come back';
+    this.btnAlias.setAttribute('aria-label', 'Alias this folder'); this.btnAlias.onclick = () => this.askAlias();
+    bar.append(this.tag, this.btnBack, this.btnFwd, this.btnUp, this.crumbBox, this.input, this.find, this.btnFind, this.btnAlias, this.btnPin);
 
     const head = el('div', 'head row');
     this.heads = {};
@@ -191,10 +196,30 @@ export class Pane {
     const parts = crumbs(this.path);
     this.crumbBox.replaceChildren(...parts.flatMap((c, i) => {
       const b = el('button', 'crumb', c.name); b.onclick = () => this.go(c.path);
-      return i ? [el('span', 'sep', '›'), b] : [b];
+      if (!i) return [b];
+      const s = el('button', 'sep', '›'); s.title = `Folders in ${parts[i - 1].name}`;
+      s.setAttribute('aria-label', s.title); s.setAttribute('aria-haspopup', 'menu'); s.onclick = () => this.crumbMenu(i);
+      return [s, b];
     }));
     this.crumbBox.title = placeName(this.path || '') ?? this.path;
     this.crumbBox.scrollLeft = this.crumbBox.scrollWidth;
+  }
+
+  // The chevron before breadcrumb part i lists the folders in the part before it; picking one goes there.
+  // Alt+Down opens the last one; in the list, Left/Right step to the next chevron.
+  async crumbMenu(i = crumbs(this.path).length - 1) {
+    const parts = crumbs(this.path), s = this.crumbBox.querySelectorAll('.sep')[i - 1];
+    if (!s || this.crumbBox.hidden) return this.app.flash('No parent folder to list here');
+    let l;
+    try { l = await invoke('list_dir', { path: parts[i - 1].path }); } catch (err) { return this.app.flash(String(err)); }
+    if (!s.isConnected) return; // the pane went somewhere else meanwhile
+    const dirs = sortEntries(l.entries.filter((e) => e.dir && (this.app.state.hidden || !e.hidden)));
+    if (!dirs.length) return this.app.flash(`No folders in ${parts[i - 1].name}`);
+    this.app.popMenu(s.getBoundingClientRect(), dirs.map((e) => [e.name, () => { this.app.closeSideMenu(); this.list.focus(); this.go(e.path); }, false, e.path === parts[i].path ? 'here' : '']), this.list);
+    document.getElementById('side-menu').addEventListener('keydown', (e) => {
+      const j = i + (e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0);
+      if (j !== i && j > 0 && parts[j]) { e.preventDefault(); this.crumbMenu(j); }
+    });
   }
 
   paintCursor(scroll) {
@@ -244,11 +269,27 @@ export class Pane {
     this.input.value = this.path; this.crumbBox.hidden = true; this.input.hidden = false;
     this.input.focus(); this.input.select();
   }
+  // "Alias this folder…": the path box doubles as the inline name box.
+  askAlias() {
+    if (!isFolder(this.path)) return this.app.flash('Open a folder to give it an alias');
+    const a = this.app.state.aliases;
+    this.editPath(); this.aliasing = true;
+    this.input.value = Object.keys(a).find((k) => a[k] === this.path) || '';
+    this.input.placeholder = 'Alias name for this folder · Enter saves, empty removes, Esc cancels';
+    this.input.setAttribute('aria-label', 'Alias name for this folder'); this.input.select();
+  }
   async commitPath() {
-    const t = resolveTyped(this.input.value, this.app.home);
+    const v = this.input.value.trim();
+    if (this.aliasing) { if (this.app.setAlias(v, this.path)) this.closePath(); return; }
+    const t = v.startsWith('@') ? expandAlias(v, this.app.state.aliases, this.app.home) : resolveTyped(v, this.app.home);
+    if (t == null) return this.app.flash(`No alias named ${v.split(/[\\/]/)[0]} · the Settings ? sheet lists them`);
     if (await this.go(t)) this.closePath();
   }
-  closePath() { if (this.input.hidden) return; this.input.hidden = true; this.crumbBox.hidden = false; this.list.focus(); }
+  closePath() {
+    if (this.input.hidden) return;
+    this.aliasing = false; this.input.placeholder = ''; this.input.setAttribute('aria-label', 'Folder path');
+    this.input.hidden = true; this.crumbBox.hidden = false; this.list.focus();
+  }
 
   openSearch() {
     if (!isFolder(this.path)) return this.app.flash('Open a folder to search in it');

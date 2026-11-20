@@ -150,3 +150,60 @@ export function dropRefusal(sources, dest, mv) {
   }
   return mv && sources.every((s) => norm(norm(s).replace(/[\\/][^\\/]*$/, '')) === d) ? 'Already in this folder' : '';
 }
+
+// Folder aliases: "@name" or "@name/sub/path" typed in the path bar -> the folder it stands for; null when no alias
+// has that name. "@h" is home unless the user saved an "h" of their own. Names are lower-case letters, digits, - and _.
+export const ALIAS = /^[a-z0-9_-]+$/;
+export function expandAlias(text, aliases = {}, home = '') {
+  const m = text.trim().match(/^@([^\\/]*)(?:[\\/]+(.*))?$/);
+  if (!m) return null;
+  const all = { h: home, ...aliases }, k = m[1].toLowerCase(), base = Object.hasOwn(all, k) ? all[k] : '';
+  if (!base || !m[2]) return base || null;
+  const sep = base.includes('\\') ? '\\' : '/';
+  return `${base.replace(/[\\/]+$/, '')}${sep}${m[2].split(/[\\/]+/).filter(Boolean).join(sep)}`;
+}
+
+// Settings file (Export / Import settings): { inode: 1, settings: { ... }, theme }.
+// Each setting: [check, what it should be (for the refusal), what the user calls it (for "Imported ...")].
+const strs = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
+const obj = (v, ok = () => true) => !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every(ok);
+const bool = (v) => typeof v === 'boolean';
+const SETTINGS = {
+  preset: [(v) => typeof v === 'string', 'the name of a key set', 'key set'],
+  keys: [(v) => obj(v, strs), 'a list of keys for each action', 'changed keys'],
+  pins: [strs, 'a list of paths', 'pins'],
+  side: [(v) => obj(v) && strs(v.hide) && strs(v.fold), 'the hidden and folded sidebar lists', 'sidebar'],
+  aliases: [(v) => obj(v, (x) => typeof x === 'string' && !!x) && Object.keys(v).every((k) => ALIAS.test(k)), 'a folder for each alias name', 'aliases'],
+  sort: [(v) => obj(v) && ['name', 'size', 'date', 'kind'].includes(v.key) && bool(v.reverse), 'a sort column and direction', 'view options'],
+  hidden: [bool, 'true or false', 'view options'],
+  dual: [bool, 'true or false', 'view options'],
+  preview: [bool, 'true or false', 'view options'],
+  cols: [(v) => obj(v, Number.isFinite), 'column widths', 'view options'],
+  split: [Number.isFinite, 'a number', 'view options'],
+  pvw: [Number.isFinite, 'a number', 'view options'],
+  askBin: [bool, 'true or false', 'warnings'],
+  warnExt: [bool, 'true or false', 'warnings'],
+};
+// `theme` = this app's own theme choice (null = it follows the suite / the default).
+export const exportSettings = (state, theme = null) => ({ inode: 1, settings: Object.fromEntries(Object.keys(SETTINGS).filter((k) => k in state).map((k) => [k, state[k]])), theme });
+// Checks a settings file's text. Wrong shape: { error } (the reason), nothing to apply. Otherwise { settings, theme, said }:
+// `settings` goes over the saved state with Object.assign (what the file does not name stays as it is), `theme` is
+// undefined when the file has none, `said` names what came in.
+export function importSettings(text) {
+  let j;
+  try { j = JSON.parse(text); } catch { return { error: 'it is not valid JSON' }; }
+  if (!obj(j) || !('inode' in j)) return { error: 'it is not an Inode settings file' };
+  if (j.inode !== 1) return { error: `it is settings version ${j.inode}; this Inode reads version 1` };
+  if (!obj(j.settings)) return { error: 'its "settings" part is missing' };
+  if (j.theme != null && !(typeof j.theme === 'string' && /^[a-z0-9-]{1,40}$/.test(j.theme))) return { error: '"theme" should be a theme name' };
+  const settings = {}, said = new Set();
+  for (const [k, [ok, want, name]] of Object.entries(SETTINGS)) {
+    if (!(k in j.settings)) continue;
+    if (!ok(j.settings[k])) return { error: `"${k}" should be ${want}` };
+    settings[k] = j.settings[k]; said.add(name);
+  }
+  if (settings.side) settings.side = { hide: settings.side.hide, fold: settings.side.fold, v: 1 };
+  if ('theme' in j) said.add('theme');
+  if (!said.size) return { error: 'it holds no settings' };
+  return { settings, theme: j.theme, said: [...said] };
+}

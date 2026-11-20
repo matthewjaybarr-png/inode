@@ -4,6 +4,13 @@
 export const PRESETS = { default: 'Default', windows: 'Windows Explorer', vim: 'Vim' };
 
 export const ACTIONS = [
+  // Settings come first in the "?" sheet, each with a button there (`toggle` = the saved setting an On/Off button flips).
+  { id: 'askBin', group: 'Settings', label: 'Ask before sending to the bin', keys: [], toggle: 'askBin', run: (a) => a.toggleSetting('askBin', 'Delete asks before sending to the bin', 'Delete sends to the bin without asking') },
+  { id: 'warnExt', group: 'Settings', label: 'Warn when a rename changes the extension', keys: [], toggle: 'warnExt', run: (a) => a.toggleSetting('warnExt', 'Rename warns when the extension changes', 'Rename changes extensions without asking') },
+  { id: 'exportSettings', group: 'Settings', label: 'Export settings to this folder', keys: ['Ctrl+Alt+E'], run: (a) => a.exportSettings() },
+  { id: 'importSettings', group: 'Settings', label: 'Import settings from the selected .json file', keys: ['Ctrl+Alt+I'], run: (a) => a.importSettings() },
+  { id: 'alias', group: 'Settings', label: 'Alias this folder…', keys: ['Ctrl+Shift+A'], run: (a) => a.pane().askAlias() },
+
   { id: 'down', group: 'Move', label: 'Next item', keys: ['ArrowDown'], vim: ['ArrowDown', 'J'], extend: true, run: (a, e) => a.pane().move(a.pane().cursor + 1, e.shiftKey) },
   { id: 'up', group: 'Move', label: 'Previous item', keys: ['ArrowUp'], vim: ['ArrowUp', 'K'], extend: true, run: (a, e) => a.pane().move(a.pane().cursor - 1, e.shiftKey) },
   { id: 'pageDown', group: 'Move', label: 'Page down', keys: ['PageDown'], vim: ['PageDown', 'Ctrl+F'], extend: true, run: (a, e) => a.pane().move(a.pane().cursor + a.pane().pageSize(), e.shiftKey) },
@@ -15,6 +22,7 @@ export const ACTIONS = [
   { id: 'back', group: 'Move', label: 'Back', keys: ['Alt+ArrowLeft'], windows: ['Alt+ArrowLeft', 'Backspace'], vim: ['Alt+ArrowLeft', 'Shift+H'], run: (a) => a.pane().goBack() },
   { id: 'forward', group: 'Move', label: 'Forward', keys: ['Alt+ArrowRight'], vim: ['Alt+ArrowRight', 'Shift+L'], run: (a) => a.pane().goForward() },
   { id: 'editPath', group: 'Move', label: 'Type a path', keys: ['Ctrl+L'], windows: ['Ctrl+L', 'Alt+D', 'F4'], vim: ['Ctrl+L', '/'], run: (a) => a.pane().editPath() },
+  { id: 'crumbMenu', group: 'Move', label: 'Folders beside this one (breadcrumb list; ← → move along the path)', keys: ['Alt+ArrowDown'], run: (a) => a.pane().crumbMenu() },
   { id: 'search', group: 'Move', label: 'Search this folder and subfolders', keys: ['Ctrl+F'], windows: ['Ctrl+F', 'Ctrl+E'], vim: ['Ctrl+Shift+F'], run: (a) => a.pane().openSearch() },
   { id: 'toggleSelect', group: 'Select', label: 'Select / unselect item', keys: ['Space'], run: (a) => a.pane().toggleSelect() },
   { id: 'selectAll', group: 'Select', label: 'Select all', keys: ['Ctrl+A'], run: (a) => a.pane().selectAll() },
@@ -70,7 +78,7 @@ export const ACTIONS = [
   { id: 'pin', group: 'View', label: 'Pin / unpin this folder', keys: ['Ctrl+D'], run: (a) => a.togglePin(a.pane().path) },
   { id: 'pinItem', group: 'View', label: 'Pin / unpin the file or folder under the cursor', keys: ['Ctrl+Shift+D'], run: (a) => a.togglePin(a.pane().rows[a.pane().cursor]?.path) },
   { id: 'menu', group: 'View', label: 'Menu for the item under the cursor', keys: ['Shift+F10', 'ContextMenu'], run: (a) => a.cursorMenu() },
-  { id: 'help', group: 'View', label: 'Keyboard shortcuts', keys: ['?', 'F1'], run: (a) => a.showKeys() },
+  { id: 'help', group: 'View', label: 'Settings and keyboard shortcuts', keys: ['?', 'F1'], run: (a) => a.showKeys() },
 ];
 
 // "Ctrl+Shift+N", "Alt+ArrowUp", "?" … Shift is dropped for symbols (it is already in the character), kept for letters and digits.

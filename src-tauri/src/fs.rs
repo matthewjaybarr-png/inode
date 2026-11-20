@@ -495,17 +495,42 @@ pub struct Props {
     pub ctime: f64,
     /// Unix permission bits; None on Windows.
     pub mode: Option<u32>,
+    /// Unix: the owning user's name (its number when it has none); None on Windows.
+    pub owner: Option<String>,
+    /// Windows attributes; None elsewhere.
+    pub readonly: Option<bool>,
+    pub hidden: Option<bool>,
+}
+
+// shortcut: reads /etc/passwd only, so LDAP/NIS users show as a number; use getpwuid_r if that matters.
+#[cfg(unix)]
+fn user_name(uid: u32) -> String {
+    let named = |l: &str| {
+        let mut f = l.split(':');
+        let n = f.next()?;
+        (f.nth(1)?.parse() == Ok(uid)).then(|| n.to_string())
+    };
+    std::fs::read_to_string("/etc/passwd").ok().and_then(|t| t.lines().find_map(named)).unwrap_or_else(|| uid.to_string())
 }
 
 /// Size and dates for the Properties dialog; a folder's size is its whole tree (links are not followed).
-pub fn props(path: &str) -> R<Props> {
+/// `deep` false (the details pane, asked on every cursor move) counts only what is directly in the folder.
+pub fn props(path: &str, deep: bool) -> R<Props> {
     let md = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
     let ms = |t: std::io::Result<std::time::SystemTime>| t.ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as f64).unwrap_or(0.0);
     let mut p = Props { size: md.len(), mtime: ms(md.modified()), ctime: ms(md.created()), ..Default::default() };
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         p.mode = Some(md.permissions().mode() & 0o7777);
+        p.owner = Some(user_name(md.uid()));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        let a = md.file_attributes();
+        p.readonly = Some(a & 0x1 != 0);
+        p.hidden = Some(a & 0x2 != 0);
     }
     if md.is_dir() {
         p.size = 0;
@@ -515,7 +540,9 @@ pub fn props(path: &str) -> R<Props> {
                 let Ok(m) = e.metadata() else { continue };
                 if m.is_dir() {
                     p.folders += 1;
-                    stack.push(e.path());
+                    if deep {
+                        stack.push(e.path());
+                    }
                 } else {
                     p.files += 1;
                     p.size += m.len();
@@ -663,12 +690,15 @@ mod tests {
         std::fs::create_dir_all(d.join("sub")).unwrap();
         std::fs::write(d.join("a"), b"12345").unwrap();
         std::fs::write(d.join("sub/b"), b"123").unwrap();
-        let p = props(&s(&d)).unwrap();
+        let p = props(&s(&d), true).unwrap();
         assert_eq!((p.size, p.files, p.folders), (8, 2, 1));
         assert!(p.mtime > 0.0);
-        assert_eq!(props(&s(&d.join("a"))).unwrap().size, 5);
+        assert_eq!(props(&s(&d.join("a")), true).unwrap().size, 5);
+        // shallow (details pane): only what is directly inside
+        let top = props(&s(&d), false).unwrap();
+        assert_eq!((top.size, top.files, top.folders), (5, 1, 1));
         #[cfg(unix)]
-        assert!(p.mode.is_some());
+        assert!(p.mode.is_some() && !p.owner.unwrap().is_empty());
         std::fs::remove_dir_all(&d).unwrap();
     }
 

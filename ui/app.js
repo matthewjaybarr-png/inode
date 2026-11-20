@@ -1,6 +1,6 @@
 // Inode: two panes side by side, a places sidebar, keyboard-first.
 import { Pane } from './pane.js';
-import { extOf, kindOf, formatSize, formatDate, formatMode, sidebarModel, moved, BIN, TRASH, RECENT, placeName, isFolder, archiveStem } from './util.js';
+import { extOf, kindOf, formatSize, formatDate, formatMode, sidebarModel, moved, BIN, TRASH, RECENT, placeName, isFolder, archiveStem, ALIAS, exportSettings, importSettings } from './util.js';
 import { followDesktopTheme, openThemePicker } from './theme.js';
 import { setupOps } from './ops.js';
 import { setupDnd } from './dnd.js';
@@ -14,7 +14,7 @@ const IMAGES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'avif'
 const note = (t) => Object.assign(document.createElement('div'), { className: 'pv-note', textContent: t });
 const STORE = 'folyren-files:state';
 const TRASH_LABEL = `Delete (to ${BIN})`;
-const defaults = { sort: { key: 'name', reverse: false }, hidden: false, dual: true, split: 0.5, focus: 0, paths: [], tabs: [], pins: [], side: { hide: [], fold: ['Places', 'Drives'], v: 1 }, manage: false, preview: false, cols: {}, pvw: 320, preset: 'default', keys: {} };
+const defaults = { sort: { key: 'name', reverse: false }, hidden: false, dual: true, split: 0.5, focus: 0, paths: [], tabs: [], pins: [], side: { hide: [], fold: ['Places', 'Drives'], v: 1 }, manage: false, preview: false, cols: {}, pvw: 320, preset: 'default', keys: {}, aliases: {}, askBin: false, warnExt: true };
 // Places and Drives start folded (a busy sidebar is hard to scan); v marks profiles that already got that default once.
 const fresh = (s) => (s.side?.v ? s : { ...s, side: { hide: s.side?.hide || [], fold: [...new Set([...(s.side?.fold || []), 'Places', 'Drives'])], v: 1 } });
 const load = () => { try { return fresh({ ...defaults, ...JSON.parse(localStorage.getItem(STORE) || '{}') }); } catch { return { ...defaults }; } };
@@ -261,7 +261,7 @@ const app = {
          it('Rename', 'rename'), it('Compress to .zip', 'compress'), !!stem && it('Extract here', 'extractHere'), !!stem && it(`Extract to folder ${stem}`, 'extractTo'), it(pinned(entry.path) ? 'Unpin from sidebar' : 'Pin to sidebar', 'pinItem'), it(TRASH_LABEL, 'trash'), null,
          it(this.state.preview ? 'Hide preview' : 'Show preview', 'preview'), props()]
       : [it('New folder', 'newFolder'), it('New file', 'newFile'), it('Paste', 'paste'), null,
-         it('Open in terminal', 'terminal'), own('Copy folder path', () => this.copyPath([here])), it(pinned(here) ? 'Unpin this folder' : 'Pin this folder', 'pin'), null,
+         it('Open in terminal', 'terminal'), own('Copy folder path', () => this.copyPath([here])), it(pinned(here) ? 'Unpin this folder' : 'Pin this folder', 'pin'), it('Alias this folder…', 'alias'), null,
          it('Show / hide hidden items', 'hidden'), it(this.state.preview ? 'Hide preview' : 'Show preview', 'preview'), it('Refresh', 'refresh'), null,
          own('Folder properties', () => this.showProps({ name: here.split(/[\\/]/).filter(Boolean).pop() || here, path: here, dir: true }))];
     this.popMenu({ left: ev.clientX, top: ev.clientY, bottom: ev.clientY }, items, this.pane().list);
@@ -365,28 +365,86 @@ const app = {
     this.renderPlaces(); this.panes.forEach((p) => p.renderTabs()); this.saveState();
   },
 
+  // Folder aliases (state.aliases: name -> folder), typed as @name in the path bar. An empty name removes this folder's.
+  // False = the name was refused, so the name box stays open.
+  setAlias(name, path) {
+    const a = this.state.aliases, n = name.replace(/^@/, '').toLowerCase(), old = Object.keys(a).filter((k) => a[k] === path);
+    if (n && !ALIAS.test(n)) { this.flash('An alias name is letters, digits, - or _ (no spaces)'); return false; }
+    if (!n) { for (const k of old) delete a[k]; this.flash(old.length ? `Removed alias @${old.join(', @')}` : 'This folder had no alias to remove'); }
+    else { const was = a[n]; a[n] = path; this.flash(was && was !== path ? `@${n} replaced: it was ${was}, now ${path}` : `@${n} now goes to ${path}`); }
+    this.saveState(); return true;
+  },
+  aliasHint(start) {
+    const all = { h: this.home, ...this.state.aliases }, hit = Object.keys(all).filter((k) => k.startsWith(start.toLowerCase()));
+    return hit.length ? hit.map((k) => `@${k} = ${all[k]}`).join(' · ') : `No alias starts with @${start}`;
+  },
+  toggleSetting(key, on, off) {
+    this.state[key] = !this.state[key];
+    this.flash(this.state[key] ? on : off); this.saveState();
+  },
+  // Export: everything the user set up, as inode-settings.json in the active pane's folder, selected.
+  async exportSettings() {
+    const p = this.pane();
+    if (!isFolder(p.path)) return this.flash(`${placeName(p.path) ?? 'This'} is a list, not a folder: open a folder to export the settings into it`);
+    try {
+      const theme = (await invoke('theme_choice')).own ?? null;
+      const path = await invoke('save_settings', { dir: p.path, text: JSON.stringify(exportSettings(this.state, theme), null, 2) });
+      if (await p.go(p.path, { push: false, keep: path })) { p.selected = new Set([path]); p.paintCursor(false); }
+      if (this.other().path === p.path) this.other().refresh();
+      this.flash(`Exported the settings to ${path}`);
+    } catch (e) { this.flash(`Could not export the settings: ${e}`); }
+  },
+  // Import: the selected .json in the active pane. A file of the wrong shape changes nothing and says why.
+  async importSettings() {
+    const [path, more] = this.pane().targets();
+    if (!path || more || extOf(path) !== 'json') return this.flash('Select one .json settings file first (Export settings makes one)');
+    // shortcut: read_text stops at 64 KB (a settings file is a few KB) and a cut-off file is refused as invalid JSON; read it whole if settings ever grow.
+    const text = await invoke('read_text', { path }).catch(() => null);
+    const r = text == null ? { error: 'it cannot be read as text' } : importSettings(text);
+    if (r.error) return this.flash(`Nothing imported: ${r.error}`);
+    Object.assign(this.state, r.settings);
+    let theme = '';
+    if (r.theme !== undefined) await invoke('set_theme_choice', { scope: 'app', value: r.theme }).catch((e) => { theme = ` (the theme could not be set: ${e})`; });
+    this.rebuildKeys(); this.renderPlaces(); this.layout();
+    $('#preview').hidden = !this.state.preview; $('#btn-preview').setAttribute('aria-pressed', String(this.state.preview));
+    if (this.state.dual && this.panes[1].path == null) await this.panes[1].go(this.panes[0].path, { push: false });
+    this.panes.forEach((p) => { p.render(p.rows[p.cursor]?.path); p.renderTabs(); });
+    this.focus(this.active);
+    this.flash(`Imported ${r.said.join(', ')} from ${path.split(/[\\/]/).pop()}${theme}`);
+  },
+
   // Preview column: text, images and PDFs of the item under the cursor.
+  // Details: several selected = their count and size; nothing under the cursor = this folder.
   togglePreview() {
     this.state.preview = !this.state.preview;
     $('#preview').hidden = !this.state.preview;
     $('#btn-preview').setAttribute('aria-pressed', String(this.state.preview));
     this.saveState(); this.status();
   },
-  async showPreview(e) {
+  async showPreview(e, p = this.pane()) {
     const box = $('#preview-body'), head = $('#preview-head');
     const t = ++this.previewSeq;
     box.replaceChildren(); head.replaceChildren();
+    const h = document.createElement('div'); h.className = 'pv-name';
+    if (p.selected.size > 1) {
+      // shortcut: folders in a multi-selection are counted, not totalled (Properties totals one folder); walk them if asked for.
+      const sel = p.rows.filter((r) => p.selected.has(r.path)), files = sel.filter((r) => !r.dir), dirs = sel.length - files.length;
+      h.textContent = `${sel.length} items selected`;
+      const m = document.createElement('div'); m.className = 'pv-meta';
+      m.textContent = [files.length && `${formatSize(files.reduce((n, r) => n + r.size, 0))} in ${files.length} file${files.length === 1 ? '' : 's'}`, dirs && `${dirs} folder${dirs === 1 ? '' : 's'} (contents not counted)`].filter(Boolean).join(' · ');
+      head.append(h, m);
+      return;
+    }
+    e ||= isFolder(p.path) ? { name: p.path.split(/[\\/]/).filter(Boolean).pop() || p.path, path: p.path, dir: true } : null;
     if (!e) { head.textContent = 'Nothing selected'; return; }
-    const h = document.createElement('div'); h.className = 'pv-name'; h.textContent = e.name;
-    const m = document.createElement('div'); m.className = 'pv-meta';
-    m.textContent = [kindOf(e), e.dir ? '' : formatSize(e.size, false), formatDate(e.mtime)].filter(Boolean).join(' · ');
-    head.append(h, m);
+    h.textContent = e.name;
+    head.append(h);
+    this.showDetails(e, head);
     const ext = extOf(e.name);
     const src = () => window.__TAURI__.core.convertFileSrc(e.path);
     let node;
     if (e.dir) {
-      const n = await invoke('list_dir', { path: e.path }).then((l) => l.entries.length, () => null);
-      node = Object.assign(document.createElement('div'), { className: 'pv-note', textContent: n == null ? 'Folder (cannot be read)' : `Folder · ${n} item${n === 1 ? '' : 's'}` });
+      node = ''; // a folder is all details
     } else if (IMAGES.includes(ext)) {
       node = Object.assign(document.createElement('img'), { className: 'pv-img', src: src(), alt: e.name });
       node.onerror = () => node.replaceWith(note('No preview for this image'));
@@ -399,6 +457,34 @@ const app = {
     if (t === this.previewSeq) box.append(node);
   },
   previewSeq: 0,
+  // The details block under the name: what the listing knows at once, then what `props` and the image itself add.
+  async showDetails(e, head) {
+    const dl = Object.assign(document.createElement('dl'), { className: 'pv-details' });
+    const when = (ms) => (ms ? new Date(ms).toLocaleString() : '');
+    let pr = null, dim = '';
+    const fill = () => {
+      dl.replaceChildren();
+      const row = (k, v) => { if (v) dl.append(Object.assign(document.createElement('dt'), { textContent: k }), Object.assign(document.createElement('dd'), { textContent: v })); };
+      const size = pr?.size ?? e.size, n = pr ? pr.files + pr.folders : 0;
+      row('Type', kindOf(e));
+      if (!e.dir) row('Size', `${formatSize(size)}${size >= 1024 ? ` (${size.toLocaleString()} bytes)` : ''}`);
+      else if (pr) row('Contains', `${n.toLocaleString()} item${n === 1 ? '' : 's'}`);
+      row('Dimensions', dim);
+      row('Modified', when(pr?.mtime || e.mtime)); row('Created', when(pr?.ctime));
+      row('Path', e.path);
+      if (pr?.mode != null) row('Permissions', formatMode(pr.mode));
+      row('Owner', pr?.owner);
+      if (pr?.readonly != null) row('Attributes', [pr.readonly && 'Read-only', pr.hidden && 'Hidden'].filter(Boolean).join(', ') || 'None');
+    };
+    fill(); head.append(dl);
+    if (!e.dir && IMAGES.includes(extOf(e.name))) {
+      const i = new Image();
+      i.onload = () => { dim = `${i.naturalWidth} × ${i.naturalHeight} px`; fill(); };
+      i.src = window.__TAURI__.core.convertFileSrc(e.path);
+    }
+    pr = await invoke('props', { path: e.path, deep: false }).catch(() => null); // deep false: a folder is not walked on every cursor move
+    fill();
+  },
 
   // "?" sheet: every action from keys.js, grouped, with its keys; Change rebinds, Reset goes back to the preset.
   showKeys() {
@@ -407,8 +493,20 @@ const app = {
       const body = sheet.querySelector('.keys-body'); body.replaceChildren();
       const sel = sheet.querySelector('select'); sel.value = this.state.preset;
       let group = null;
+      const btn = (text, title, run) => Object.assign(document.createElement('button'), { textContent: text, title, onclick: run });
+      // After the Settings rows: the aliases, each with Go and Remove.
+      const aliases = () => {
+        body.append(Object.assign(document.createElement('h3'), { textContent: 'Folder aliases · type @name in the path bar' }));
+        for (const [k, path] of Object.entries({ h: this.home, ...this.state.aliases })) {
+          const row = document.createElement('div'); row.className = 'key-row';
+          row.append(Object.assign(document.createElement('kbd'), { textContent: `@${k}` }), Object.assign(document.createElement('span'), { className: 'key-label', textContent: path }),
+            btn('Go', `Open ${path}`, () => { this.hideKeys(); this.goPlace(path); }));
+          if (k in this.state.aliases) row.append(btn('Remove', `Remove the alias @${k}`, () => { delete this.state.aliases[k]; this.saveState(); draw(); }));
+          body.append(row);
+        }
+      };
       for (const a of ACTIONS) {
-        if (a.group !== group) { group = a.group; body.append(Object.assign(document.createElement('h3'), { textContent: group })); }
+        if (a.group !== group) { if (group === 'Settings') aliases(); group = a.group; body.append(Object.assign(document.createElement('h3'), { textContent: group })); }
         const row = document.createElement('div'); row.className = 'key-row';
         const ks = document.createElement('span'); ks.className = 'key-chips';
         for (const c of keysFor(a, this.state.preset, this.state.keys)) ks.append(Object.assign(document.createElement('kbd'), { textContent: label(c) }));
@@ -424,6 +522,9 @@ const app = {
           addEventListener('keydown', grab, true);
         };
         row.append(Object.assign(document.createElement('span'), { className: 'key-label', textContent: a.label }), ks, ch);
+        // A setting's own control: On/Off for a toggle; the others leave the sheet and run.
+        if (a.toggle) { const on = this.state[a.toggle], b = btn(on ? 'On' : 'Off', `${a.label}: ${on ? 'on' : 'off'}. Click to turn it ${on ? 'off' : 'on'}.`, () => { a.run(this); draw(); }); b.className = 'setting'; b.setAttribute('aria-pressed', String(on)); row.prepend(b); }
+        else if (a.group === 'Settings') { const b = btn(a.label.split(' ')[0], a.label, () => { this.hideKeys(); a.run(this); }); b.className = 'setting'; row.prepend(b); }
         if (this.state.keys[a.id]) {
           const r = Object.assign(document.createElement('button'), { textContent: 'Reset', title: 'Back to the preset key' });
           r.onclick = () => { delete this.state.keys[a.id]; this.rebuildKeys(); this.saveState(); draw(); };

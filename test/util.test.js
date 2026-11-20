@@ -123,3 +123,45 @@ test('drops onto itself, into its own subfolder or back where it is are refused'
   assert.match(dropRefusal(['C:\\Docs'], 'c:\\docs\\Sub', true), /own subfolder/);
   assert.equal(dropRefusal(['C:\\a.txt'], 'C:\\', true), 'Already in this folder');
 });
+
+test('folder aliases expand, with sub paths, and unknown names give null', async () => {
+  const { expandAlias } = await import('../ui/util.js');
+  const a = { work: '/srv/work/', jobs: 'U:\\Jobs', net: '\\\\srv\\share' };
+  assert.equal(expandAlias('@h', a, '/home/m'), '/home/m');
+  assert.equal(expandAlias(' @Work ', a, '/home/m'), '/srv/work/');
+  assert.equal(expandAlias('@work/a//b/', a), '/srv/work/a/b');
+  assert.equal(expandAlias('@jobs/2026\\may', a), 'U:\\Jobs\\2026\\may');
+  assert.equal(expandAlias('@net\\x', a), '\\\\srv\\share\\x');
+  assert.equal(expandAlias('@h/x', { h: '/mine' }, '/home/m'), '/mine/x'); // a saved "h" wins over the built-in
+  assert.equal(expandAlias('@h/x', {}, 'C:\\Users\\m'), 'C:\\Users\\m\\x');
+  for (const t of ['@nope', '@', '@constructor', '/plain']) assert.equal(expandAlias(t, a, '/home/m'), null);
+  assert.equal(expandAlias('@h', a, ''), null);
+});
+
+test('settings export and import: round trip, partial files merge, wrong shapes are refused with the reason', async () => {
+  const { exportSettings, importSettings } = await import('../ui/util.js');
+  const state = { preset: 'vim', keys: { open: ['O'] }, pins: ['/a'], side: { hide: ['/x'], fold: ['Drives'], v: 1 }, aliases: { w: '/srv/w' },
+    sort: { key: 'date', reverse: true }, hidden: true, dual: false, preview: true, cols: { name: 200 }, split: 0.4, pvw: 300, askBin: true, warnExt: false,
+    paths: ['/secret'], tabs: [], focus: 1, manage: true };
+  const file = exportSettings(state, 'nord');
+  assert.equal(file.inode, 1);
+  assert.ok(!('paths' in file.settings) && !('tabs' in file.settings)); // where the panes are is not a setting
+  const r = importSettings(JSON.stringify(file));
+  assert.equal(r.error, undefined);
+  assert.equal(r.theme, 'nord');
+  const { paths, tabs, focus, manage, ...kept } = state;
+  assert.deepEqual(r.settings, kept);
+  assert.deepEqual(r.said, ['key set', 'changed keys', 'pins', 'sidebar', 'aliases', 'view options', 'warnings', 'theme']);
+  // only what the file names comes in; a file without "theme" leaves the theme alone, null resets it
+  const part = importSettings('{"inode":1,"settings":{"pins":["/p"],"future":42}}');
+  assert.deepEqual([part.settings, part.theme, part.said], [{ pins: ['/p'] }, undefined, ['pins']]);
+  assert.equal(importSettings('{"inode":1,"settings":{},"theme":null}').theme, null);
+  for (const [text, why] of [
+    ['{nope', /not valid JSON/], ['[1]', /not an Inode settings file/], ['{"pins":[]}', /not an Inode settings file/],
+    ['{"inode":2,"settings":{}}', /version 2/], ['{"inode":1}', /"settings" part is missing/], ['{"inode":1,"settings":{}}', /no settings/],
+    ['{"inode":1,"settings":{"pins":"/a"}}', /"pins" should be a list of paths/], ['{"inode":1,"settings":{"pins":["/a"],"hidden":"yes"}}', /"hidden"/],
+    ['{"inode":1,"settings":{"aliases":{"Bad Name":"/a"}}}', /"aliases"/], ['{"inode":1,"settings":{"sort":{"key":"colour","reverse":false}}}', /"sort"/],
+    ['{"inode":1,"settings":{"keys":{"open":"O"}}}', /"keys"/], ['{"inode":1,"settings":{"side":{"hide":[]}}}', /"side"/],
+    ['{"inode":1,"settings":{},"theme":"../x"}', /"theme"/],
+  ]) { const bad = importSettings(text); assert.match(bad.error, why); assert.equal(bad.settings, undefined); }
+});

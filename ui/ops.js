@@ -1,5 +1,5 @@
 // File operations: a one-at-a-time queue with progress, in-app prompts (WebView2 ignores confirm()), and undo.
-import { formatSize, BIN, TRASH, placeName, isFolder, archiveStem, toUriList, fromUris } from './util.js';
+import { formatSize, extOf, BIN, TRASH, placeName, isFolder, archiveStem, toUriList, fromUris } from './util.js';
 
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
 const $ = (s) => document.querySelector(s);
@@ -160,6 +160,11 @@ export function setupOps(app) {
       if (!e || !inFolder(p, 'rename things')) return;
       p.startRename(e.path, async (name) => {
         if (!name || name === e.name) return;
+        const ext = (n) => (extOf(n) ? `.${extOf(n)}` : 'no extension');
+        if (app.state.warnExt && !e.dir && extOf(name) !== extOf(e.name) && (await ask(`Change the extension of "${e.name}" from ${ext(e.name)} to ${ext(name)}? It may then open in a different app, or not at all.`, [
+          { id: 'rename', label: 'Rename' },
+          { id: null, label: 'Cancel', focus: true },
+        ])) !== 'rename') return;
         const run = async (redone) => {
           const to = await invoke('rename_path', { path: e.path, name });
           pushUndo(`rename to ${name}`, () => invoke('rename_path', { path: to, name: e.name }), run, redone);
@@ -221,6 +226,11 @@ export function setupOps(app) {
         if (ok === 'delete') enqueue(`Deleting ${what}`, async () => { await invoke('delete_paths', { paths }); app.flash(`Deleted ${what} permanently`); });
         return;
       }
+      // Settings: "Ask before sending to the bin". Delete again confirms (not a held key's repeats), like Shift+Delete does.
+      if (app.state.askBin && (await ask(`Move ${what} to the ${BIN}? Delete again confirms.`, [
+        { id: 'bin', label: `Move to ${BIN}`, danger: true },
+        { id: null, label: 'Cancel', focus: true },
+      ], { bin: (e) => e.key === 'Delete' && !e.shiftKey && !e.repeat })) !== 'bin') return;
       const run = async (redone) => {
         const { items, failed } = await invoke('trash', { paths });
         if (items.length) pushUndo(`delete of ${plural(items.length, 'item')}`, () => invoke('restore', { items }), run, redone);

@@ -183,8 +183,40 @@ async fn transfer(app: tauri::AppHandle, sources: Vec<String>, dest: String, mv:
 }
 
 #[tauri::command]
-async fn props(path: String) -> R<fs::Props> {
-    tauri::async_runtime::spawn_blocking(move || fs::props(&path)).await.map_err(|e| e.to_string())?
+async fn props(path: String, deep: Option<bool>) -> R<fs::Props> {
+    tauri::async_runtime::spawn_blocking(move || fs::props(&path, deep.unwrap_or(true))).await.map_err(|e| e.to_string())?
+}
+
+/// Writes `text` as a new file `name` in `dir`: "name (2)" when taken, never over an existing file. Returns its path.
+fn write_free(dir: &str, name: &str, text: &str) -> R<String> {
+    use std::io::Write;
+    let d = std::path::Path::new(dir);
+    let p = if d.join(name).symlink_metadata().is_ok() { ops::free_name(d, name, false) } else { d.join(name) };
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&p).map_err(|e| format!("Cannot write {}: {e}", fs::s(&p)))?;
+    f.write_all(text.as_bytes()).map_err(|e| format!("Cannot write {}: {e}", fs::s(&p)))?;
+    Ok(fs::s(&p))
+}
+
+/// Export settings: the UI's settings as inode-settings.json in `dir`.
+#[tauri::command]
+async fn save_settings(dir: String, text: String) -> R<String> {
+    write_free(&dir, "inode-settings.json", &text)
+}
+
+#[cfg(test)]
+mod settings_tests {
+    #[test]
+    fn a_taken_name_gets_a_number_and_nothing_is_overwritten() {
+        let d = std::env::temp_dir().join(format!("inode-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let dir = d.to_string_lossy();
+        let a = super::write_free(&dir, "inode-settings.json", "one").unwrap();
+        let b = super::write_free(&dir, "inode-settings.json", "two").unwrap();
+        assert!(a.ends_with("inode-settings.json") && b.ends_with("inode-settings (2).json"));
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "one");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "two");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
 }
 
 #[tauri::command]
@@ -308,7 +340,7 @@ pub fn run() {
             launch(app.handle(), &std::env::args().collect::<Vec<_>>(), &cwd.to_string_lossy());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![new_window, theme_choice, set_theme_choice, list_dir, places, open_path, open_terminal, startup_path, desktop::desktop_theme, conflicts, transfer, move_back, rename_path, new_item, extract, undo_extract, trash_restore, trash_purge, trash, has_bin, remove_empty, restore, delete_paths, read_text, probe, search, eject, props, apps_for, open_with, compress, clip_write, clip_read, same_device])
+        .invoke_handler(tauri::generate_handler![new_window, theme_choice, set_theme_choice, list_dir, places, open_path, open_terminal, startup_path, desktop::desktop_theme, conflicts, transfer, move_back, rename_path, new_item, extract, undo_extract, trash_restore, trash_purge, trash, has_bin, remove_empty, restore, delete_paths, read_text, probe, search, eject, props, save_settings, apps_for, open_with, compress, clip_write, clip_read, same_device])
         .run(tauri::generate_context!())
         .expect("error while running Inode");
 }
