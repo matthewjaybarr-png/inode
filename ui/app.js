@@ -11,17 +11,18 @@ import { ACTIONS, PRESETS, buildMap, lookup, keysFor, comboOf, label } from './k
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
 const $ = (s) => document.querySelector(s);
 
-const IMAGES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'avif'];
+import { IMAGES, VIEW_DEFAULTS, COLUMNS, shownCols, WIN } from './util.js';
 const note = (t) => Object.assign(document.createElement('div'), { className: 'pv-note', textContent: t });
 const STORE = 'folyren-files:state';
 const TRASH_LABEL = `Delete (to ${BIN})`;
 const defaults = { sort: { key: 'name', reverse: false }, hidden: false, dual: true, split: 0.5, focus: 0, paths: [], tabs: [], pins: [], side: { hide: [], fold: ['Places', 'Drives'], v: 1 }, manage: false, preview: false, cols: {}, pvw: 320, preset: 'default', keys: {}, aliases: {}, askBin: false, warnExt: true, recents: [], restoreTabs: true };
 // What every window shares; the rest (tabs, layout) is each window's own. See the 'storage' listener in start().
-const SHARED = ['pins', 'side', 'keys', 'preset', 'aliases', 'recents', 'askBin', 'warnExt', 'restoreTabs'];
+const SHARED = ['pins', 'side', 'keys', 'preset', 'aliases', 'recents', 'askBin', 'warnExt', 'restoreTabs', 'folders'];
 // Places and Drives start folded (a busy sidebar is hard to scan); v marks profiles that already got that default once.
 const fresh = (s) => (s.side?.v ? s : { ...s, side: { hide: s.side?.hide || [], fold: [...new Set([...(s.side?.fold || []), 'Places', 'Drives'])], v: 1 } });
 const load = () => { try { return fresh({ ...defaults, ...JSON.parse(localStorage.getItem(STORE) || '{}') }); } catch { return { ...defaults }; } };
 
+Object.assign(defaults, structuredClone(VIEW_DEFAULTS)); // list/grid, columns, sort options, per-folder views
 const app = {
   state: load(),
   panes: [],
@@ -49,10 +50,16 @@ const app = {
   pane() { return this.panes[this.active]; },
 
   setSort(key) {
-    const s = this.state.sort;
-    this.state.sort = s.key === key ? { key, reverse: !s.reverse } : { key, reverse: false };
-    this.panes.forEach((p) => p.render(p.rows[p.cursor]?.path));
-    this.saveState();
+    const s = this.pane().sort;
+    this.pane().setView({ sort: s.key === key ? { key, reverse: !s.reverse } : { key, reverse: false } });
+  },
+  // After a view setting changed: column tracks, both panes, saved.
+  redraw() { this.layout(); this.panes.forEach((p) => p.path != null && p.render(p.rows[p.cursor]?.path)); this.saveState(); },
+  // Flips a saved view setting (a column, a sort option, per-folder views).
+  toggleView(key, name) {
+    if (WIN && key === 'colMode') return this.flash('Permissions is a Linux column: Windows folders have none to show');
+    this.state[key] = !this.state[key];
+    this.redraw(); this.flash(`${name}: ${this.state[key] ? 'on' : 'off'}`);
   },
   toggleHidden() {
     this.state.hidden = !this.state.hidden;
@@ -81,10 +88,12 @@ const app = {
     $('#btn-swap').disabled = !this.state.dual;
     const f = Math.min(0.85, Math.max(0.15, this.state.split));
     m.style.gridTemplateColumns = this.state.dual ? `minmax(0, ${f}fr) 6px minmax(0, ${1 - f}fr)` : 'minmax(0, 1fr)';
-    for (const k of ['name', 'size', 'date', 'kind']) {
+    for (const k of ['name', ...Object.keys(COLUMNS)]) {
       const w = this.state.cols[k];
       if (w) m.style.setProperty(`--w-${k}`, `${w}px`); else m.style.removeProperty(`--w-${k}`);
     }
+    // Name grows only up to --w-name; the spare width goes to an empty last track so Name and the next column stay close.
+    m.style.setProperty('--cols', ['minmax(120px, var(--w-name, 420px))', ...shownCols(this.state).map((k) => `var(--w-${k}, ${COLUMNS[k][2]}px)`), 'minmax(0, 1fr)'].join(' '));
     $('#preview').style.width = `${Math.min(900, Math.max(200, this.state.pvw))}px`;
   },
   // A drag handle: `set(width)` while dragging, `reset()` on double-click; `start()` gives the width at pointer down.
