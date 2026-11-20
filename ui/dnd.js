@@ -24,7 +24,7 @@ export function setupDnd(app) {
   // The drop target under an element: { el (what lights up), path (TRASH = the bin), file (a pinned file) }.
   function target(at) {
     const place = at?.closest?.('.place[data-drop]'), tab = at?.closest?.('.tab'), pane = app.panes.find((p) => p.root.contains(at));
-    if (place || tab) { const el = place || tab, path = el.dataset.drop; return { el, path: path.startsWith('shell:') ? TRASH : path, file: el.dataset.kind === 'file' }; }
+    if (place || tab) { const el = place || tab, path = el.dataset.drop; return { el, path, file: el.dataset.kind === 'file' }; }
     if (!pane || pane.path == null) return null;
     const row = pane.path !== TRASH && at.closest?.('.item.dir');
     return row ? { el: row, path: pane.rows[row.dataset.i].path } : { el: pane.root, path: pane.path };

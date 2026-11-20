@@ -141,10 +141,10 @@ async fn conflicts(sources: Vec<String>, dest: String) -> Vec<String> {
     ops::conflicts(&sources, &dest)
 }
 
-/// Puts the files on the system clipboard for other apps (see clip.rs for what each platform is given).
+/// Puts the files on the system clipboard for other apps (see clip.rs for what each platform is given); `mv` = it is a cut.
 #[tauri::command]
-async fn clip_write(paths: Vec<String>, uris: String) -> R<()> {
-    tauri::async_runtime::spawn_blocking(move || clip::write(&paths, &uris)).await.map_err(|e| e.to_string())?
+async fn clip_write(paths: Vec<String>, uris: String, mv: bool) -> R<()> {
+    tauri::async_runtime::spawn_blocking(move || clip::write(&paths, &uris, mv)).await.map_err(|e| e.to_string())?
 }
 
 /// The files on the system clipboard as file: URI lines ("" = none); Err when it cannot be read at all.

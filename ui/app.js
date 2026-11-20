@@ -193,16 +193,15 @@ const app = {
     }
     if (keep) [...nav.querySelectorAll('[data-key]')].find((x) => x.dataset.key === keep)?.focus();
   },
-  // Opens a sidebar place in the active pane. Windows' Recycle Bin is not listed in the app yet: Explorer shows it.
+  // Opens a sidebar place in the active pane.
   async goPlace(path) {
-    if (path.startsWith('shell:')) return invoke('open_path', { path }).catch((e) => this.flash(`Could not open the ${BIN}: ${e}`));
     const done = this.pane().go(path);
     this.focus(this.active);
     return done;
   },
   goKind(kind) {
     const pl = this.places.find((p) => p.kind === kind);
-    return pl ? this.goPlace(pl.path) : this.flash('Recent is not available on Windows yet');
+    if (pl) return this.goPlace(pl.path);
   },
   // The folder an item lives in, with the item selected (Recent, search results).
   async openFolder(e = this.pane().rows[this.pane().cursor]) {

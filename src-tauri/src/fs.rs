@@ -276,7 +276,7 @@ pub fn unpercent(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// The home trash as a listing: original name, stored path, deletion time in the date column.
+/// The Trash / Recycle Bin as a listing: original name, stored path, deletion time in the date column.
 fn trash_entries() -> Vec<Entry> {
     let made = |(t, when): (crate::ops::Trashed, f64)| {
         let md = Path::new(&t.stored).symlink_metadata().ok()?;
@@ -328,13 +328,9 @@ pub fn places() -> Vec<Place> {
             }
         }
     }
-    if cfg!(windows) {
-        // Opens in Explorer for now (see open()); an in-app Recycle Bin listing comes later.
-        v.push(Place { name: "Recycle Bin".into(), title: "Recycle Bin (opens in Explorer)".into(), path: BIN_SHELL.into(), kind: "trash", eject: false });
-    } else {
-        v.push(Place { name: "Trash".into(), title: "Trash".into(), path: TRASH.into(), kind: "trash", eject: false });
-        v.push(Place { name: "Recent".into(), title: "Recently used files".into(), path: RECENT.into(), kind: "recent", eject: false });
-    }
+    let bin = if cfg!(windows) { "Recycle Bin" } else { "Trash" };
+    v.push(Place { name: bin.into(), title: bin.into(), path: TRASH.into(), kind: "trash", eject: false });
+    v.push(Place { name: "Recent".into(), title: "Recently used files".into(), path: RECENT.into(), kind: "recent", eject: false });
     if cfg!(windows) {
         v.push(Place { name: "This PC".into(), title: "This PC".into(), path: String::new(), kind: "computer", eject: false });
     }
@@ -345,9 +341,6 @@ pub fn places() -> Vec<Place> {
     }
     v
 }
-
-/// Explorer's own name for the Recycle Bin folder; not a file path, so open() lets it through unchecked.
-const BIN_SHELL: &str = "shell:RecycleBinFolder";
 
 const IN_USE: &str = "it is still in use. Close anything open on it and try again.";
 
@@ -425,7 +418,7 @@ pub fn same_device(a: &str, b: &str) -> bool {
 
 /// Opens a file or folder in the desktop's default app (the user double-clicked it, so programs run too).
 pub fn open(path: &str) -> R<()> {
-    if !Path::new(path).exists() && !(cfg!(windows) && path == BIN_SHELL) {
+    if !Path::new(path).exists() {
         return Err(format!("Not found: {path}"));
     }
     let mut cmd = if cfg!(windows) {
