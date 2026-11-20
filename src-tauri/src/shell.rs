@@ -32,24 +32,80 @@ pub async fn link_dir(path: String) -> Option<String> {
     }
 }
 
-/// What Explorer shows for a file (its thumbnail, else its icon) as a data URL, at most `size` pixels a side.
-/// Linux: None for now.
+/// A picture for a file as a data URL, at most `size` pixels a side. Windows: what Explorer shows (its thumbnail,
+/// else its icon). Linux: the desktop's cached thumbnail when there is a fresh one, else None (none are made here).
 #[tauri::command]
 pub async fn thumb(path: String, size: i32) -> Option<String> {
+    use base64::Engine;
+    let b64 = |kind: &str, bytes: Vec<u8>| format!("data:image/{kind};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes));
     #[cfg(windows)]
-    return tauri::async_runtime::spawn_blocking(move || {
-        use base64::Engine;
+    let job = move || {
         let (w, h, px) = win::thumb(&path, size.clamp(16, 1024))?;
-        Some(format!("data:image/bmp;base64,{}", base64::engine::general_purpose::STANDARD.encode(bmp(w, h, px))))
-    })
-    .await
-    .ok()
-    .flatten();
+        Some(b64("bmp", bmp(w, h, px)))
+    };
     #[cfg(not(windows))]
-    {
-        let _ = (path, size);
-        None
+    let job = move || {
+        let cache = std::env::var_os("XDG_CACHE_HOME").map(std::path::PathBuf::from).or_else(|| Some(Path::new(&std::env::var_os("HOME")?).join(".cache")))?;
+        Some(b64("png", std::fs::read(cached_thumb(&cache.join("thumbnails"), Path::new(&path), size)?).ok()?))
+    };
+    tauri::async_runtime::spawn_blocking(job).await.ok().flatten()
+}
+
+/// The freedesktop thumbnail of `file` under `dir` (~/.cache/thumbnails): <size dir>/<md5 of the file's URI>.png,
+/// the size nearest to the one asked for first, and only one written after the file last changed.
+#[cfg(any(not(windows), test))]
+fn cached_thumb(dir: &Path, file: &Path, size: i32) -> Option<std::path::PathBuf> {
+    let changed = file.metadata().ok()?.modified().ok()?;
+    let name = format!("{}.png", md5_hex(thumb_uri(&file.to_string_lossy()).as_bytes()));
+    let sizes = if size > 128 { ["large", "normal"] } else { ["normal", "large"] };
+    sizes.iter().map(|s| dir.join(s).join(&name)).find(|p| p.metadata().and_then(|m| m.modified()).is_ok_and(|t| t > changed))
+}
+
+/// The file:// URI thumbnailers hash: the path as GLib escapes it (letters, digits and -._~!$&'()*+,;=:@/ stay).
+#[cfg(any(not(windows), test))]
+fn thumb_uri(path: &str) -> String {
+    let mut uri = String::from("file://");
+    for &b in path.as_bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~!$&'()*+,;=:@/".contains(&b) {
+            uri.push(b as char);
+        } else {
+            uri.push_str(&format!("%{b:02X}"));
+        }
     }
+    uri
+}
+
+/// MD5 as lower-case hex (RFC 1321), only to name thumbnail cache files; no crate in the tree has it.
+#[cfg(any(not(windows), test))]
+fn md5_hex(data: &[u8]) -> String {
+    const S: [u32; 16] = [7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21];
+    let mut h: [u32; 4] = [0x6745_2301, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476];
+    let mut msg = data.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend((data.len() as u64 * 8).to_le_bytes());
+    for block in msg.chunks_exact(64) {
+        let m: Vec<u32> = block.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        let [mut a, mut b, mut c, mut d] = h;
+        for i in 0..64 {
+            let (f, g) = match i / 16 {
+                0 => ((b & c) | (!b & d), i),
+                1 => ((d & b) | (!d & c), (5 * i + 1) % 16),
+                2 => (b ^ c ^ d, (3 * i + 5) % 16),
+                _ => (c ^ (b | !d), (7 * i) % 16),
+            };
+            let k = ((i as f64 + 1.0).sin().abs() * 4_294_967_296.0) as u32;
+            let sum = a.wrapping_add(f).wrapping_add(k).wrapping_add(m[g]);
+            (a, d, c) = (d, c, b);
+            b = b.wrapping_add(sum.rotate_left(S[i / 16 * 4 + i % 4]));
+        }
+        for (x, y) in h.iter_mut().zip([a, b, c, d]) {
+            *x = x.wrapping_add(y);
+        }
+    }
+    h.iter().flat_map(|x| x.to_le_bytes()).map(|b| format!("{b:02x}")).collect()
 }
 
 /// Starts a real OS drag of these files from the window (Windows; rows dragged past the window's edge, see
@@ -194,6 +250,39 @@ mod tests {
         assert_eq!(&b[122..], [127, 0, 255, 128, 1, 2, 3, 255]);
         // No alpha anywhere means an opaque picture, not an invisible one.
         assert_eq!(&super::bmp(1, 1, vec![9, 8, 7, 0])[122..], [9, 8, 7, 255]);
+    }
+
+    #[test]
+    fn md5_and_thumbnail_names_match_the_spec() {
+        assert_eq!(super::md5_hex(b""), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(super::md5_hex(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
+        assert_eq!(super::md5_hex(b"12345678901234567890123456789012345678901234567890123456789012345678901234567890"), "57edf4a22be3c955ac49da2e2107b67a");
+        // The example in the freedesktop thumbnail spec.
+        assert_eq!(super::md5_hex(super::thumb_uri("/home/jens/photos/me.png").as_bytes()), "c6ee772d9e49320e97ec29a7eb5b1697");
+        assert_eq!(super::thumb_uri("/a b/\u{e9}#(1).png"), "file:///a%20b/%C3%A9%23(1).png");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cached_thumbnail_must_be_newer_than_the_file() {
+        let d = std::env::temp_dir().join(format!("inode-thumb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("cache/large")).unwrap();
+        std::fs::create_dir_all(d.join("cache/normal")).unwrap();
+        let file = d.join("clip.mp4");
+        let name = |f: &std::path::Path| format!("{}.png", super::md5_hex(super::thumb_uri(&f.to_string_lossy()).as_bytes()));
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        let stamp = |f: &std::path::Path, t| std::fs::File::options().write(true).open(f).unwrap().set_modified(t).unwrap();
+        std::fs::write(&file, "x").unwrap();
+        assert_eq!(super::cached_thumb(&d.join("cache"), &file, 256), None);
+        let large = d.join("cache/large").join(name(&file));
+        std::fs::write(&large, "png").unwrap();
+        stamp(&file, old);
+        assert_eq!(super::cached_thumb(&d.join("cache"), &file, 256), Some(large.clone()));
+        assert_eq!(super::cached_thumb(&d.join("cache"), &file, 96), Some(large.clone())); // no "normal" one: the large one does
+        stamp(&large, old - std::time::Duration::from_secs(60));
+        assert_eq!(super::cached_thumb(&d.join("cache"), &file, 256), None); // the file changed after the thumbnail was made
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[cfg(unix)]

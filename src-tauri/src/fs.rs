@@ -18,6 +18,11 @@ pub struct Entry {
     /// Trash only: the full path the item was deleted from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// Created time, ms since 1970 (0 when the file system does not say).
+    pub ctime: f64,
+    /// Unix permission bits; None on Windows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<u32>,
 }
 
 /// The virtual folders: lists that live at no real path (the UI treats them like "This PC").
@@ -147,7 +152,24 @@ fn entry(de: &std::fs::DirEntry) -> Option<(Entry, bool)> {
     // Follow links so a link to a folder opens like a folder; a broken link stays a plain entry.
     let md = if link { std::fs::metadata(de.path()).unwrap_or(lmd) } else { lmd };
     let mtime = md.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as f64).unwrap_or(0.0);
-    Some((Entry { hidden, path: s(&de.path()), name, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime, link, origin: None }, real_dir))
+    let ctime = md.created().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as f64).unwrap_or(0.0);
+    #[cfg(unix)]
+    let mode = Some(std::os::unix::fs::PermissionsExt::mode(&md.permissions()) & 0o7777);
+    #[cfg(not(unix))]
+    let mode = None;
+    Some((Entry { hidden, path: s(&de.path()), name, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime, link, origin: None, ctime, mode }, real_dir))
+}
+
+/// How many items each folder holds, for the Size column (None: it cannot be read). Hidden items count only
+/// when `hidden` is on, so the number is what opening the folder would show.
+// shortcut: a batch runs to its end even after the pane has left the folder; add a generation check like
+// search() if folders full of slow network subfolders keep a worker busy.
+pub fn counts(paths: &[String], hidden: bool) -> Vec<Option<u64>> {
+    #[cfg(windows)]
+    let hid = |de: &std::fs::DirEntry| de.metadata().map(|md| is_hidden(&de.file_name().to_string_lossy(), &md)).unwrap_or(false);
+    #[cfg(not(windows))]
+    let hid = |de: &std::fs::DirEntry| de.file_name().as_encoded_bytes().first() == Some(&b'.');
+    paths.iter().map(|p| Some(std::fs::read_dir(p).ok()?.flatten().filter(|de| hidden || !hid(de)).count() as u64)).collect()
 }
 
 #[derive(Serialize, Debug)]
@@ -219,7 +241,7 @@ pub fn list(path: &str) -> R<Listing> {
     if path.is_empty() && cfg!(windows) {
         let entries = drives()
             .into_iter()
-            .map(|d| Entry { name: d.clone(), path: d, dir: true, size: 0, mtime: 0.0, hidden: false, link: false, origin: None })
+            .map(|d| Entry { name: d.clone(), path: d, dir: true, size: 0, mtime: 0.0, hidden: false, link: false, origin: None, ctime: 0.0, mode: None })
             .collect();
         return Ok(Listing { path: String::new(), parent: None, entries });
     }
@@ -283,7 +305,7 @@ fn trash_entries() -> Vec<Entry> {
     let made = |(t, when): (crate::ops::Trashed, f64)| {
         let md = Path::new(&t.stored).symlink_metadata().ok()?;
         let name = Path::new(&t.original).file_name()?.to_string_lossy().into_owned();
-        Some(Entry { name, path: t.stored, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime: when, hidden: false, link: md.file_type().is_symlink(), origin: Some(t.original) })
+        Some(Entry { name, path: t.stored, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime: when, hidden: false, link: md.file_type().is_symlink(), origin: Some(t.original), ctime: 0.0, mode: None })
     };
     crate::ops::trash_items().into_iter().filter_map(made).collect()
 }
@@ -338,7 +360,7 @@ fn recent_entries(used: Vec<(String, f64)>) -> Vec<Entry> {
         .filter_map(|(path, mtime)| {
             let md = std::fs::metadata(&path).ok()?;
             let name = Path::new(&path).file_name()?.to_string_lossy().into_owned();
-            Some(Entry { name, path, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime, hidden: false, link: false, origin: None })
+            Some(Entry { name, path, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime, hidden: false, link: false, origin: None, ctime: 0.0, mode: None })
         })
         .collect();
     v.sort_by(|a, b| b.mtime.total_cmp(&a.mtime));
@@ -684,6 +706,18 @@ mod tests {
         assert!(get(".dot").hidden && !get("a.txt").hidden);
         assert!(get("a.txt").mtime > 0.0);
         assert_eq!(l.parent.as_deref(), d.parent().map(s).as_deref());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn counts_items_per_folder_and_skips_unreadable() {
+        let d = std::env::temp_dir().join(format!("inode-counts-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("sub/inner")).unwrap();
+        std::fs::write(d.join("sub/a.txt"), b"").unwrap();
+        std::fs::write(d.join("sub/.dot"), b"").unwrap();
+        let paths = [s(&d.join("sub")), s(&d.join("sub/inner")), s(&d.join("gone"))];
+        assert_eq!(counts(&paths, false), [Some(2), Some(0), None]);
+        assert_eq!(counts(&paths, true), [Some(3), Some(0), None]);
         std::fs::remove_dir_all(&d).unwrap();
     }
 
