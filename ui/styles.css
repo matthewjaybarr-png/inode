@@ -46,7 +46,7 @@ button { cursor: default; background: none; border: 0; }
 .side-tag { min-width: 24px; height: 24px; margin-right: 4px; border-radius: 6px; font-size: 11px; font-weight: 700; color: var(--muted); border: 1px solid var(--border); }
 .pane.active .side-tag { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 #panes.single .side-tag { display: none; }
-.bar { display: flex; align-items: center; gap: 2px; padding: 6px; border-bottom: 1px solid var(--border); }
+.bar { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; row-gap: 4px; padding: 6px; border-bottom: 1px solid var(--border); }
 .nav { width: 28px; height: 28px; border-radius: 6px; font-size: 17px; line-height: 1; color: var(--muted); }
 .nav:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 .nav:disabled { opacity: .35; }

@@ -135,7 +135,7 @@ const app = {
         : `Move ${n === 1 ? 'the item under the cursor' : `${n} selected items`} to the ${BIN} (Delete). Shift+Delete deletes permanently.`;
     nf.title = ok ? `New folder in ${p.path} (Ctrl+Shift+N)` : off;
     file.title = ok ? `New file in ${p.path} (Ctrl+Alt+N)` : off;
-    $('#act-where').textContent = ok ? `${this.state.dual ? `${this.active ? 'Right' : 'Left'} pane: ` : ''}${p.path}${n ? ` · ${n} to delete` : ' · nothing selected'}`
+    $('#act-where').textContent = ok ? `${this.state.dual ? `${this.active ? 'Right' : 'Left'} pane: ` : ''}${p.path}${n ? ` · ${n} ${document.body.classList.contains('picking') ? 'selected' : 'to delete'}` : ' · nothing selected'}`
       : bin ? `${BIN}: right-click an item to restore it; right-click empty space to restore everything or empty it`
         : p.path.startsWith(TAGS) ? 'Tagged items, wherever they are: right-click one to open its folder or change its tag. Nothing can be made here.'
         : p.path === RECENT ? 'Recent: files used lately, newest first; right-click one to open its folder. Nothing can be made here.'

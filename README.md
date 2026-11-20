@@ -16,6 +16,7 @@ Status: early. It works day to day, but expect rough edges.
 - Folder aliases (`@name` in the path bar), breadcrumb drop-downs, a details pane, settings export and import.
 - Grid view with thumbnails, folder item counts, column chooser, per-folder views; bulk rename, `/` filter, `:` jump, command palette, quick look (Space), tabs reopen at start.
 - Colour tags (seven colours, a Tags list in the sidebar), search inside files (ripgrep when installed), and your own right-click commands as `.toml` files in omanta's format (Settings: Open actions folder).
+- On Linux: network places and Connect to server (Ctrl+K), phones and encrypted drives through gio/udisks, and an opt-in file chooser for other apps (`inode --picker on`).
 - Compress to zip; extract zip, 7z, tar and rar (through `bsdtar`).
 - Follows the Omarchy theme live.
 - Can be the default file manager: "Show in folder" from browsers opens Inode.
