@@ -1,6 +1,7 @@
 // Pure helpers (no DOM, no Tauri) so node --test can cover them.
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+const plain = new Intl.Collator(undefined, { sensitivity: 'base' }); // natural order off: file10 before file2
 
 export const isWinPath = (p) => /^[A-Za-z]:[\\/]/.test(p) || p === '';
 
@@ -9,16 +10,19 @@ export function extOf(name) {
   return i > 0 ? name.slice(i + 1).toLowerCase() : '';
 }
 
-// Folders first, then by key; ties fall back to name so the order is stable.
-export function sortEntries(entries, key = 'name', reverse = false) {
+// By key; ties fall back to name so the order is stable. Options (the saved view settings, all optional):
+// dirsFirst (default on), natural = numbers in names count as numbers (default on), hiddenLast (default off).
+export function sortEntries(entries, key = 'name', reverse = false, { dirsFirst = true, natural = true, hiddenLast = false } = {}) {
+  const c = natural ? collator : plain, name = (a, b) => c.compare(a.name, b.name);
   const by = {
-    name: (a, b) => collator.compare(a.name, b.name),
     size: (a, b) => a.size - b.size,
     date: (a, b) => a.mtime - b.mtime,
-    kind: (a, b) => collator.compare(extOf(a.name), extOf(b.name)),
-  }[key] || ((a, b) => collator.compare(a.name, b.name));
+    kind: (a, b) => c.compare(extOf(a.name), extOf(b.name)),
+    created: (a, b) => (a.ctime || 0) - (b.ctime || 0),
+    mode: (a, b) => (a.mode || 0) - (b.mode || 0),
+  }[key] || name;
   const dir = reverse ? -1 : 1;
-  return [...entries].sort((a, b) => (b.dir - a.dir) || (by(a, b) * dir) || collator.compare(a.name, b.name));
+  return [...entries].sort((a, b) => (hiddenLast && a.hidden - b.hidden) || (dirsFirst && b.dir - a.dir) || (by(a, b) * dir) || name(a, b));
 }
 
 export function formatSize(n, dir) {
@@ -29,6 +33,9 @@ export function formatSize(n, dir) {
   do { v /= 1024; i++; } while (v >= 1024 && i < u.length - 1);
   return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
 }
+
+// A folder's Size cell: "12 items"; nothing while it is being counted or when it cannot be read.
+export const formatCount = (n) => (n == null ? '' : `${n} item${n === 1 ? '' : 's'}`);
 
 // Compact, Explorer-like: "Today 08:52", "Nov 12 08:52" this year, "Nov 12, 2025" older.
 export function formatDate(ms, now = Date.now()) {
@@ -174,7 +181,7 @@ const SETTINGS = {
   pins: [strs, 'a list of paths', 'pins'],
   side: [(v) => obj(v) && strs(v.hide) && strs(v.fold), 'the hidden and folded sidebar lists', 'sidebar'],
   aliases: [(v) => obj(v, (x) => typeof x === 'string' && !!x) && Object.keys(v).every((k) => ALIAS.test(k)), 'a folder for each alias name', 'aliases'],
-  sort: [(v) => obj(v) && ['name', 'size', 'date', 'kind'].includes(v.key) && bool(v.reverse), 'a sort column and direction', 'view options'],
+  sort: [(v) => obj(v) && ['name', 'size', 'date', 'kind', 'created', 'mode'].includes(v.key) && bool(v.reverse), 'a sort column and direction', 'view options'],
   hidden: [bool, 'true or false', 'view options'],
   dual: [bool, 'true or false', 'view options'],
   preview: [bool, 'true or false', 'view options'],
@@ -183,6 +190,10 @@ const SETTINGS = {
   pvw: [Number.isFinite, 'a number', 'view options'],
   askBin: [bool, 'true or false', 'warnings'],
   warnExt: [bool, 'true or false', 'warnings'],
+  view: [(v) => Array.isArray(v) && v.length === 2 && v.every((x) => obj(x) && bool(x.grid) && [0, 1, 2].includes(x.tile)), 'list or grid and a tile size for each pane', 'view options'],
+  ...Object.fromEntries(['colSize', 'colDate', 'colKind', 'colCreated', 'colMode', 'dirsFirst', 'natural', 'hiddenLast', 'perFolder'].map((k) => [k, [bool, 'true or false', 'view options']])),
+  // `folders` (the views remembered per folder) stays out: it is this machine's paths, and 500 of them would
+  // pass the 64 KB the import reads.
 };
 // `theme` = this app's own theme choice (null = it follows the suite / the default).
 export const exportSettings = (state, theme = null) => ({ inode: 1, settings: Object.fromEntries(Object.keys(SETTINGS).filter((k) => k in state).map((k) => [k, state[k]])), theme });
@@ -207,3 +218,35 @@ export function importSettings(text) {
   if (!said.size) return { error: 'it holds no settings' };
   return { settings, theme: j.theme, said: [...said] };
 }
+
+// View settings added in 0.6: each pane's default (list or grid, tile size 0-2), which columns show, sort
+// options, and `folders` = the view remembered per folder path (oldest first).
+export const VIEW_DEFAULTS = { view: [{ grid: false, tile: 1 }, { grid: false, tile: 1 }], colSize: true, colDate: true, colKind: true, colCreated: false, colMode: false, dirsFirst: true, natural: true, hiddenLast: false, perFolder: true, folders: {} };
+
+// The optional list columns: key -> [its saved setting, heading, default width in px]. Name always shows.
+export const COLUMNS = { size: ['colSize', 'Size', 80], date: ['colDate', 'Modified', 130], kind: ['colKind', 'Type', 100], created: ['colCreated', 'Created', 130], mode: ['colMode', 'Permissions', 130] };
+// The ones switched on, in order. Permissions is a Linux column: Windows listings carry none.
+export const shownCols = (state, win = WIN) => Object.keys(COLUMNS).filter((k) => state[COLUMNS[k][0]] && !(win && k === 'mode'));
+
+// The view a pane shows `path` with: the one remembered for that folder, else the pane's default.
+export function viewOf(state, side, path) {
+  const f = state.perFolder && state.folders?.[path], d = state.view?.[side] || VIEW_DEFAULTS.view[0];
+  return f ? { grid: !!f.grid, tile: f.tile ?? 1, sort: { key: f.key, reverse: !!f.reverse } } : { grid: !!d.grid, tile: d.tile ?? 1, sort: state.sort };
+}
+// `folders` with `view` remembered for `path` as the newest; the oldest drop out past `cap`.
+export function remember(folders, path, view, cap = 500) {
+  const rest = Object.entries(folders).filter(([k]) => k !== path);
+  return Object.fromEntries([...rest.slice(Math.max(0, rest.length - cap + 1)), [path, view]]);
+}
+
+// Grid cursor: from tile i of n, laid out `cols` to a row, one step sideways (dx) or one row (dy). Down from
+// the row above a short last row lands on the last tile; cols 1 is the plain list.
+export function gridStep(i, n, cols, dx, dy) {
+  if (dx) return Math.max(0, Math.min(n - 1, i + dx));
+  const j = i + dy * cols;
+  if (j < 0) return i;
+  if (j >= n) return Math.floor(i / cols) < Math.floor((n - 1) / cols) ? n - 1 : i;
+  return j;
+}
+
+export const IMAGES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'avif'];

@@ -62,8 +62,8 @@ button { cursor: default; background: none; border: 0; }
 .bar .nav .ico { width: 15px; height: 15px; vertical-align: -2px; }
 .path-input { padding: 0 8px; outline: none; border-color: var(--accent); }
 
-/* Name grows only up to --w-name; the spare width goes to an empty last track so Name and Modified stay close. */
-.row { display: grid; grid-template-columns: minmax(120px, var(--w-name, 420px)) var(--w-size, 80px) var(--w-date, 130px) var(--w-kind, 100px) minmax(0, 1fr); align-items: center; }
+/* One track per shown column; app.js layout() builds --cols from the column chooser. */
+.row { display: grid; grid-template-columns: var(--cols); align-items: center; }
 .head button { position: relative; }
 .grip { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 1; }
 .grip:hover, .grip.drag { background: var(--accent); opacity: .6; }
@@ -219,3 +219,17 @@ kbd { font: 11px ui-monospace, Consolas, monospace; padding: 1px 6px; border: 1p
 .keys-card button.setting { flex: none; min-width: 56px; color: var(--text); }
 .keys-card button.setting[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
 #drag-tip { position: fixed; z-index: 60; pointer-events: none; padding: 2px 8px; border-radius: 5px; font-size: 12px; white-space: nowrap; background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); }
+
+/* Grid view: tiles --tile px wide (pane.js sets it), the picture above a name of at most two lines */
+.list.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(var(--tile), 100%), 1fr)); align-content: start; gap: 4px; padding: 6px; }
+.tile { height: auto; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px; border-radius: 6px; }
+.tile > span { padding: 0; }
+.tile .pic { flex: none; display: flex; align-items: center; justify-content: center; width: calc(var(--tile) - 20px); max-width: 100%; height: calc(var(--tile) - 20px); }
+.tile .pic img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 3px; }
+.tile .pic .ico { width: 56%; height: 56%; stroke-width: 1.3; }
+.tile .c-name { display: block; width: 100%; text-align: center; white-space: normal; }
+.tile .nm { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
+.tile .where { display: none; }
+.tile .rename-input { width: 100%; box-sizing: border-box; text-align: center; }
+.nav[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); }
+.item .c-created, .item .c-mode { color: var(--muted); font-variant-numeric: tabular-nums; }

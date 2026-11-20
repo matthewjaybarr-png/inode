@@ -165,3 +165,60 @@ test('settings export and import: round trip, partial files merge, wrong shapes 
     ['{"inode":1,"settings":{},"theme":"../x"}', /"theme"/],
   ]) { const bad = importSettings(text); assert.match(bad.error, why); assert.equal(bad.settings, undefined); }
 });
+
+import { viewOf, remember, gridStep, shownCols, formatCount, exportSettings, importSettings, VIEW_DEFAULTS } from '../ui/util.js';
+
+test('sort options: natural order, folders first, hidden last, created', () => {
+  const names = (r) => r.map((x) => x.name);
+  const list = [e('file10'), e('file2'), e('.rc', { hidden: true }), e('d', { dir: true }), e('.git', { dir: true, hidden: true })];
+  assert.deepEqual(names(sortEntries(list)), ['.git', 'd', '.rc', 'file2', 'file10']);
+  assert.deepEqual(names(sortEntries(list, 'name', false, { natural: false })), ['.git', 'd', '.rc', 'file10', 'file2']);
+  assert.deepEqual(names(sortEntries(list, 'name', false, { dirsFirst: false })), ['.git', '.rc', 'd', 'file2', 'file10']);
+  assert.deepEqual(names(sortEntries(list, 'name', false, { hiddenLast: true })), ['d', 'file2', 'file10', '.git', '.rc']);
+  assert.deepEqual(names(sortEntries(list, 'name', true, { hiddenLast: true })), ['d', 'file10', 'file2', '.git', '.rc']);
+  assert.deepEqual(names(sortEntries([e('new', { ctime: 9 }), e('old', { ctime: 1 }), e('none')], 'created')), ['none', 'old', 'new']);
+});
+
+test('grid arrows: rows of `cols`, a short last row, the edges', () => {
+  // 7 tiles, 3 to a row:  0 1 2 / 3 4 5 / 6
+  assert.equal(gridStep(1, 7, 3, 0, 1), 4);
+  assert.equal(gridStep(4, 7, 3, 0, -1), 1);
+  assert.equal(gridStep(1, 7, 3, 0, -1), 1); // top row stays
+  assert.equal(gridStep(5, 7, 3, 0, 1), 6); // nothing right below: the last tile
+  assert.equal(gridStep(6, 7, 3, 0, 1), 6); // last row stays
+  assert.equal(gridStep(2, 7, 3, 1, 0), 3); // right wraps onto the next row
+  assert.equal(gridStep(0, 7, 3, -1, 0), 0);
+  assert.equal(gridStep(6, 7, 3, 1, 0), 6);
+  // One column is the list: down and up by one, clamped.
+  assert.deepEqual([gridStep(0, 3, 1, 0, 1), gridStep(2, 3, 1, 0, 1), gridStep(0, 3, 1, 0, -1)], [1, 2, 0]);
+});
+
+test('per-folder views: remembered, else the pane default; capped, newest kept', () => {
+  const s = { ...VIEW_DEFAULTS, sort: { key: 'name', reverse: false }, view: [{ grid: false, tile: 1 }, { grid: true, tile: 2 }] };
+  s.folders = remember({}, '/pics', { grid: true, tile: 0, key: 'date', reverse: true });
+  assert.deepEqual(viewOf(s, 0, '/pics'), { grid: true, tile: 0, sort: { key: 'date', reverse: true } });
+  assert.deepEqual(viewOf(s, 0, '/docs'), { grid: false, tile: 1, sort: s.sort });
+  assert.deepEqual(viewOf(s, 1, '/docs'), { grid: true, tile: 2, sort: s.sort });
+  assert.deepEqual(viewOf({ ...s, perFolder: false }, 0, '/pics'), { grid: false, tile: 1, sort: s.sort });
+  // State saved before these settings existed: still a list.
+  assert.deepEqual(viewOf({ sort: s.sort }, 1, '/x'), { grid: false, tile: 1, sort: s.sort });
+  let f = {};
+  for (const p of ['/a', '/b', '/c', '/a']) f = remember(f, p, { grid: p === '/a' }, 2);
+  assert.deepEqual(Object.keys(f), ['/c', '/a']);
+});
+
+test('columns: the chosen ones in order, Permissions only off Windows; folder counts', () => {
+  const s = { ...VIEW_DEFAULTS, colCreated: true, colMode: true, colDate: false };
+  assert.deepEqual(shownCols(s, false), ['size', 'kind', 'created', 'mode']);
+  assert.deepEqual(shownCols(s, true), ['size', 'kind', 'created']);
+  assert.deepEqual([formatCount(0), formatCount(1), formatCount(12), formatCount(null), formatCount(undefined)], ['0 items', '1 item', '12 items', '', '']);
+});
+
+test('view settings export and import; remembered folders stay behind', () => {
+  const out = exportSettings({ ...VIEW_DEFAULTS, colCreated: true, folders: { '/a': {} } });
+  assert.equal(out.settings.colCreated, true);
+  assert.ok(!('folders' in out.settings));
+  assert.deepEqual(importSettings(JSON.stringify(out)).settings.view, VIEW_DEFAULTS.view);
+  assert.match(importSettings(JSON.stringify({ inode: 1, settings: { view: [{ grid: true, tile: 7 }, { grid: false, tile: 1 }] } })).error, /"view"/);
+  assert.ok(!importSettings(JSON.stringify({ inode: 1, settings: { sort: { key: 'created', reverse: true } } })).error);
+});

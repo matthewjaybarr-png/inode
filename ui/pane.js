@@ -1,12 +1,16 @@
 // One file pane: path bar, sortable list, its own history and cursor.
 import { sortEntries, formatSize, formatDate, kindOf, crumbs, resolveTyped, expandAlias, relFolder, TRASH, RECENT, placeName, isFolder, WIN } from './util.js';
+import { extOf, formatMode, formatCount, IMAGES, COLUMNS, shownCols, viewOf, remember, gridStep } from './util.js';
 import { icon, iconFor } from './icons.js';
+import { ACTIONS, keysFor, label } from './keys.js';
 
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
 const tabName = (p) => placeName(p || '') ?? (p.split(/[\\/]/).filter(Boolean).pop() || p);
-const COLS = [['name', 'Name'], ['size', 'Size'], ['date', 'Modified'], ['kind', 'Type']];
+const COLS = [['name', 'Name'], ...Object.entries(COLUMNS).map(([k, c]) => [k, c[1]])];
+const CELL = { size: (e) => (e.dir ? formatCount(e.items) : formatSize(e.size)), date: (e) => formatDate(e.mtime), kind: kindOf, created: (e) => formatDate(e.ctime), mode: (e) => (e.mode == null ? '' : formatMode(e.mode)) };
+const TILE = [84, 124, 188]; // grid tile widths in px: small, medium, large
 
 export class Pane {
   constructor(root, app, side) {
@@ -62,9 +66,14 @@ export class Pane {
     // Not nav(): that hands focus back to the list, which would close the name box at once.
     this.btnAlias = el('button', 'nav', '@'); this.btnAlias.title = 'Alias this folder… (Ctrl+Shift+A): name it, then type @name in the path bar to come back';
     this.btnAlias.setAttribute('aria-label', 'Alias this folder'); this.btnAlias.onclick = () => this.askAlias();
-    bar.append(this.tag, this.btnBack, this.btnFwd, this.btnUp, this.crumbBox, this.input, this.find, this.btnFind, this.btnAlias, this.btnPin);
+    // Grid or list at a click; the menu beside it holds the rest of the view: tile size, sort, columns.
+    this.btnGrid = nav('Grid or list view (Ctrl+G)', '▦', () => this.setView({ grid: !this.grid }));
+    this.btnView = el('button', 'nav', '☰'); this.btnView.title = 'View menu: tile size, sort, columns (Alt+V)';
+    this.btnView.setAttribute('aria-label', 'View menu'); this.btnView.setAttribute('aria-haspopup', 'menu'); this.btnView.onclick = () => this.viewMenu();
+    bar.append(this.tag, this.btnBack, this.btnFwd, this.btnUp, this.crumbBox, this.input, this.find, this.btnFind, this.btnGrid, this.btnView, this.btnAlias, this.btnPin);
 
-    const head = el('div', 'head row');
+    const head = this.head = el('div', 'head row');
+    head.oncontextmenu = (ev) => { ev.preventDefault(); this.app.focus(this.side); this.viewMenu({ left: ev.clientX, top: ev.clientY, bottom: ev.clientY }); };
     this.heads = {};
     for (const [k, label] of COLS) {
       const h = el('button', `c-${k}`, label);
@@ -76,6 +85,21 @@ export class Pane {
     this.list.setAttribute('role', 'listbox'); this.list.setAttribute('aria-multiselectable', 'true');
     this.list.onfocus = () => this.app.focus(this.side, true);
     this.list.oncontextmenu = (ev) => { ev.preventDefault(); this.app.focus(this.side); this.app.entryMenu(ev, null); };
+    // Ctrl+wheel steps the grid's tile size (one step per 200 ms: a touchpad sends a stream of these).
+    this.list.addEventListener('wheel', (e) => {
+      if (!e.ctrlKey || !this.grid) return;
+      e.preventDefault();
+      if (e.timeStamp - (this.zoomed || 0) > 200) { this.zoomed = e.timeStamp; this.setTile(e.deltaY < 0 ? 1 : -1); }
+    }, { passive: false });
+    // Grid pictures: loaded once a tile has stayed in view a moment, let go again when it scrolls well away,
+    // so a folder of thousands only ever holds a few screens of them.
+    this.io = new IntersectionObserver((es) => {
+      for (const { target: pic, isIntersecting } of es) {
+        clearTimeout(pic.wait);
+        if (isIntersecting) { if (!pic.on) pic.wait = setTimeout(() => this.loadPic(pic), 60); }
+        else if (pic.on) { pic.on = false; pic.replaceChildren(pic.ico); }
+      }
+    }, { root: this.list, rootMargin: '400px 0px' });
     this.empty = el('div', 'empty'); this.empty.hidden = true;
     this.root.append(this.tabBar, bar, head, this.list, this.empty);
     this.root.addEventListener('mousedown', () => this.app.focus(this.side, true));
@@ -103,27 +127,38 @@ export class Pane {
   up() { if (this.parent != null) this.go(this.parent); }
 
   render(keepPath) {
-    const { hidden } = this.app.state, list = this.path === TRASH || this.path === RECENT;
+    const state = this.app.state, { hidden } = state, list = this.path === TRASH || this.path === RECENT;
+    Object.assign(this, viewOf(state, this.side, this.path)); // this.grid, this.tile, this.sort
+    const cols = this.grid ? [] : shownCols(state);
+    this.head.hidden = this.grid; this.list.classList.toggle('grid', this.grid);
+    this.list.style.setProperty('--tile', `${TILE[this.tile] ?? TILE[1]}px`);
+    this.btnGrid.setAttribute('aria-pressed', String(this.grid));
+    this.io.disconnect();
     // Recent is a history: always newest first, whatever folders are sorted by.
-    const sort = this.path === RECENT ? { key: 'date', reverse: true } : this.app.state.sort;
+    const sort = this.path === RECENT ? { key: 'date', reverse: true } : this.sort;
     this.heads.date.firstChild.data = this.path === TRASH ? 'Deleted' : 'Modified';
     const q = this.query.toLowerCase();
     const src = !q ? this.entries : this.found ?? this.entries.filter((e) => e.name.toLowerCase().includes(q));
-    this.rows = sortEntries(hidden ? src : src.filter((e) => !e.hidden), sort.key, sort.reverse);
+    if (this.counted !== hidden) { this.counted = hidden; for (const e of src) delete e.items; } // the counts follow the hidden setting
+    this.rows = sortEntries(hidden ? src : src.filter((e) => !e.hidden), sort.key, sort.reverse, state);
     for (const [k, h] of Object.entries(this.heads)) {
+      h.hidden = k !== 'name' && !cols.includes(k);
       h.classList.toggle('sorted', sort.key === k);
       h.dataset.dir = sort.key === k ? (sort.reverse ? 'desc' : 'asc') : '';
     }
     // shortcut: renders every row; add windowing if folders of 20k+ entries feel slow.
     const frag = document.createDocumentFragment();
     this.rows.forEach((e, i) => {
-      const r = el('div', `row item${e.dir ? ' dir' : ''}${e.hidden ? ' hidden-file' : ''}${e.link ? ' link' : ''}`);
+      const r = el('div', `${this.grid ? 'tile' : 'row'} item${e.dir ? ' dir' : ''}${e.hidden ? ' hidden-file' : ''}${e.link ? ' link' : ''}`);
       r.setAttribute('role', 'option'); r.dataset.i = i;
-      const name = el('span', 'c-name'); name.append(icon(iconFor(e.name, e.dir)), el('span', 'nm', e.name));
+      const name = el('span', 'c-name'), ico = icon(iconFor(e.name, e.dir));
+      // A tile: the picture (the type icon until a thumbnail loads, see loadPic) above the name.
+      if (this.grid) { const pic = el('span', 'pic'); pic.ico = ico; pic.append(ico); r.append(pic); r.title = e.name; if (!e.dir && !e.noPic) this.io.observe(pic); } else name.append(ico);
+      name.append(el('span', 'nm', e.name));
       // Trash and Recent show the folder each item came from / lives in.
       const where = list ? (e.origin || e.path).replace(/[\\/][^\\/]*$/, '') || '/' : q && relFolder(this.path, e.path);
       if (where) { const w = el('span', 'where', where); w.title = e.path; name.append(w); }
-      r.append(name, el('span', 'c-size', formatSize(e.size, e.dir)), el('span', 'c-date', formatDate(e.mtime)), el('span', 'c-kind', kindOf(e)));
+      r.append(name, ...cols.map((k) => el('span', `c-${k}`, CELL[k](e))));
       // A plain press on a row of a multi-selection keeps it (a drag may start here, see dnd.js); the click after narrows it.
       const plain = (ev) => this.selected.size > 1 && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey;
       r.onmousedown = (ev) => { if (ev.button !== 0) return; if (plain(ev) && this.selected.has(e.path)) { this.cursor = i; this.paintCursor(false); } else this.click(i, ev); };
@@ -147,6 +182,69 @@ export class Pane {
     this.renderCrumbs();
     this.paintCursor(true);
     this.btnBack.disabled = !this.back.length; this.btnFwd.disabled = !this.fwd.length; this.btnUp.disabled = this.parent == null;
+    if (cols.includes('size')) this.count();
+  }
+
+  // Folder rows get their item count after the list is drawn, all in one call, so a big folder opens at once.
+  count() {
+    const need = isFolder(this.path) ? this.rows.filter((e) => e.dir && e.items === undefined) : [], { hidden } = this.app.state;
+    if (!need.length) return;
+    for (const e of need) e.items = null; // asked for: a redraw meanwhile does not ask again
+    invoke('dir_counts', { paths: need.map((e) => e.path), hidden }).then((ns) => {
+      if (hidden !== this.app.state.hidden) return; // hidden items were switched meanwhile: that draw asked again
+      need.forEach((e, i) => { e.items = ns[i] ?? null; });
+      const got = new Set(need);
+      this.rows.forEach((e, i) => { const c = got.has(e) && this.list.children[i]?.querySelector('.c-size'); if (c) c.textContent = formatCount(e.items); });
+    }).catch(() => {});
+  }
+
+  // A tile's picture: an image file itself, else what `thumb` has (Windows: Explorer's thumbnail or icon; Linux: the desktop's cached thumbnail).
+  // shortcut: an image tile decodes the whole file, as the preview column does; make real thumbnails if folders of large photos scroll slowly.
+  async loadPic(pic) {
+    const e = this.rows[pic.parentElement?.dataset.i];
+    if (!e || !pic.isConnected) return;
+    pic.on = true;
+    const size = Math.round((TILE[this.tile] ?? TILE[1]) * (devicePixelRatio || 1));
+    const src = IMAGES.includes(extOf(e.name)) ? window.__TAURI__.core.convertFileSrc(e.path) : await invoke('thumb', { path: e.path, size }).catch(() => null);
+    if (!src) e.noPic = true; // nothing to show for it: not asked again
+    if (!src || !pic.on || !pic.isConnected) return;
+    const img = Object.assign(new Image(), { alt: '', draggable: false });
+    img.onload = () => { if (pic.on && pic.isConnected) pic.replaceChildren(img); };
+    img.src = src;
+  }
+
+  // Changes this folder's view ({ grid, tile, sort }). With "Remember view per folder" on it is kept for this
+  // folder only; otherwise (and in the lists: Trash, Recent, This PC) it becomes the pane's default.
+  setView(v) {
+    const s = this.app.state, now = { grid: this.grid, tile: this.tile, sort: this.sort, ...v };
+    if (s.perFolder && isFolder(this.path)) s.folders = remember(s.folders, this.path, { grid: now.grid, tile: now.tile, key: now.sort.key, reverse: now.sort.reverse });
+    else { s.view[this.side] = { grid: now.grid, tile: now.tile }; s.sort = now.sort; }
+    this.app.redraw();
+  }
+  setTile(d) {
+    const t = Math.max(0, Math.min(2, this.tile + d));
+    if (!this.grid) return this.app.flash('Tile size is for the grid view (Ctrl+G switches to it)');
+    if (t === this.tile) return this.app.flash(d > 0 ? 'That is the largest tile size' : 'That is the smallest tile size');
+    this.setView({ tile: t });
+  }
+  // "Use this view for other folders": folders with no view of their own open like this one from now on.
+  makeDefault() {
+    const s = this.app.state;
+    s.view[this.side] = { grid: this.grid, tile: this.tile }; s.sort = this.sort;
+    this.app.redraw(); this.app.flash('Folders with no view of their own now open like this one');
+  }
+  // The view menu (☰ in the bar, Alt+V, right-click on the column header). Every item is a command from keys.js.
+  viewMenu(r = this.btnView.getBoundingClientRect()) {
+    const a = this.app, s = a.state, shown = shownCols(s);
+    const it = (id, text, on, off) => { const x = ACTIONS.find((q) => q.id === id), c = keysFor(x, s.preset, s.keys)[0]; return [`${on ? '✓' : '\u2003'} ${text}`, () => { a.closeSideMenu(); this.list.focus(); x.run(a, {}); }, off, c ? label(c) : '']; };
+    const by = (k, id, name) => (k === 'name' || shown.includes(k)) && it(id, `Sort by ${name}${this.sort.key === k ? (this.sort.reverse ? ' ▾' : ' ▴') : ''}`, this.sort.key === k);
+    a.popMenu(r, [
+      it('gridView', 'Grid view', this.grid), it('tileBigger', 'Larger tiles', false, !this.grid || this.tile >= 2), it('tileSmaller', 'Smaller tiles', false, !this.grid || this.tile <= 0), null,
+      by('name', 'sortName', 'name'), by('size', 'sortSize', 'size'), by('date', 'sortDate', 'date modified'), by('kind', 'sortKind', 'type'), by('created', 'sortCreated', 'date created'), by('mode', 'sortMode', 'permissions'), null,
+      it('dirsFirst', 'Folders first', s.dirsFirst), it('natural', 'Number order (file2 before file10)', s.natural), it('hiddenLast', 'Hidden items last', s.hiddenLast), null,
+      ...Object.entries(COLUMNS).filter(([k]) => !(WIN && k === 'mode')).map(([, [key, name]]) => it(key, `Column: ${name}`, s[key])), null,
+      it('perFolder', 'Remember view per folder', s.perFolder), it('viewDefault', 'Use this view for other folders', false, !s.perFolder),
+    ], this.list);
   }
 
   // Tabs: strip above the path bar; + adds one, × or middle-click closes.
@@ -255,7 +353,11 @@ export class Pane {
     this.paintCursor(true);
   }
 
-  pageSize() { const r = this.list.firstElementChild; return r ? Math.max(1, Math.floor(this.list.clientHeight / r.offsetHeight) - 1) : 10; }
+  pageSize() { const r = this.list.firstElementChild; return r ? Math.max(1, Math.floor(this.list.clientHeight / r.offsetHeight) - 1) * this.across() : 10; }
+  // Tiles to a row in the grid (1 in the list), read from the layout when a key needs it.
+  across() { return this.grid ? getComputedStyle(this.list).gridTemplateColumns.split(' ').length : 1; }
+  // Arrow keys: a row up or down (dy), or one tile sideways in the grid (dx).
+  step(dx, dy, extend) { if (dx && !this.grid) return; this.move(gridStep(this.cursor, this.rows.length, this.across(), dx, dy), extend); }
 
   activate(i = this.cursor) {
     const e = this.rows[i];
