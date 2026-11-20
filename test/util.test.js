@@ -293,3 +293,43 @@ test('view settings export and import; remembered folders stay behind', () => {
   assert.match(importSettings(JSON.stringify({ inode: 1, settings: { view: [{ grid: true, tile: 7 }, { grid: false, tile: 1 }] } })).error, /"view"/);
   assert.ok(!importSettings(JSON.stringify({ inode: 1, settings: { sort: { key: 'created', reverse: true } } })).error);
 });
+
+import { actionsFor, placeName as placeOf, isFolder as realFolder, TAGS, TAG_COLOURS } from '../ui/util.js';
+import { ACTIONS as TABLE, buildMap as mapOf } from '../ui/keys.js';
+
+test('custom actions: shown only when every selected item fits', () => {
+  // As actions.rs hands them over: omanta's transcode.toml and dropbox-copy-link.toml, plus two plainer ones.
+  const transcode = { id: 'transcode', name: 'Transcode', plural: 'Transcode %n items', mimetypes: ['image/*', 'video/*'], extensions: ['.jpg', '.HEIC', '.mp4'], directories: false, under: [] };
+  const dropbox = { id: 'dropbox', name: 'Copy Dropbox Link', plural: 'Copy %n Dropbox Links', mimetypes: [], extensions: [], directories: true, under: ['/home/u/Dropbox'] };
+  const any = { id: 'send', name: 'Send', plural: '', mimetypes: [], extensions: [], directories: true, under: [] };
+  const docs = { id: 'docs', name: 'Docs only', plural: '', mimetypes: [], extensions: ['.odt'], directories: true, under: [] };
+  const all = [transcode, dropbox, any, docs];
+  const f = (path, dir = false) => ({ path, name: path.split(/[\\/]/).pop(), dir });
+  const names = (entries, win = false) => actionsFor(all, entries, win).map((x) => x.label);
+  assert.deepEqual(names([f('/home/u/a b.PNG')]), ['Transcode', 'Send']);
+  assert.deepEqual(names([f('/home/u/a.png'), f('/home/u/clip.mkv'), f('/home/u/raw.heic')]), ['Transcode 3 items', 'Send']);
+  assert.deepEqual(names([f('/home/u/a.png'), f('/home/u/notes.txt')]), ['Send'], 'one item that does not fit hides it');
+  assert.deepEqual(names([f('/home/u/pics.png', true)]), ['Send'], 'directories = false');
+  assert.deepEqual(names([f('/home/u/Dropbox/x/a.odt'), f('/home/u/Dropbox', true)]), ['Copy 2 Dropbox Links', 'Send']);
+  assert.deepEqual(names([f('/home/u/Dropbox/a.odt')]), ['Copy Dropbox Link', 'Send', 'Docs only']);
+  assert.deepEqual(names([f('/home/u/Dropbox2/a.txt')]), ['Send'], 'under is a folder, not a name prefix');
+  assert.equal(actionsFor([{ ...dropbox, under: ['C:\\Users\\u\\Dropbox\\'] }], [f('c:\\users\\u\\dropbox\\a.txt')], true).length, 1, 'Windows paths ignore case');
+  assert.deepEqual(names([]), []);
+});
+
+test('tag lists are places, not folders; the new commands are in the key table and took no key in use', () => {
+  assert.equal(placeOf(`${TAGS}red`), 'Tagged red');
+  assert.equal(realFolder(`${TAGS}red`), false);
+  assert.equal(realFolder('/home/u/tags:red'), true);
+  assert.equal(placeOf('/home/u'), undefined);
+  const ids = TABLE.map((a) => a.id);
+  assert.equal(new Set(ids).size, ids.length, 'no id twice');
+  for (const c of TAG_COLOURS) assert.ok(ids.includes(`tag-${c}`) && ids.includes(`showTag-${c}`));
+  for (const preset of ['default', 'windows', 'vim']) {
+    const m = mapOf(preset);
+    assert.equal(m.get('Alt+1').id, 'tag-red'); assert.equal(m.get('Alt+0').id, 'tagNone'); assert.equal(m.get('Ctrl+Alt+F').id, 'searchText');
+    const owners = new Map();
+    for (const a of TABLE) for (const k of a[preset] ?? a.keys) owners.set(k, [...(owners.get(k) || []), a.id]);
+    for (const [k, who] of owners) if (who.some((id) => /^(tag|showTag|search(Text|Case)|actionsFolder|reloadActions)/.test(id))) assert.equal(who.length, 1, `${preset}: ${k} is shared by ${who}`);
+  }
+});

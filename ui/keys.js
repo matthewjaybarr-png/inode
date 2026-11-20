@@ -1,6 +1,8 @@
 // One table drives both the key handling and the "?" sheet, so the sheet can never drift from what the keys do.
 // Each action: id, label, group, keys per preset (windows/vim fall back to default), extend = Shift also extends the selection.
 
+import { TAG_COLOURS, TAGS } from './util.js';
+
 export const PRESETS = { default: 'Default', windows: 'Windows Explorer', vim: 'Vim' };
 
 export const ACTIONS = [
@@ -11,6 +13,8 @@ export const ACTIONS = [
   { id: 'exportSettings', group: 'Settings', label: 'Export settings to this folder', keys: ['Ctrl+Alt+E'], run: (a) => a.exportSettings() },
   { id: 'importSettings', group: 'Settings', label: 'Import settings from the selected .json file', keys: ['Ctrl+Alt+I'], run: (a) => a.importSettings() },
   { id: 'alias', group: 'Settings', label: 'Alias this folder…', keys: ['Ctrl+Shift+A'], run: (a) => a.pane().askAlias() },
+  { id: 'actionsFolder', group: 'Settings', label: 'Open actions folder (your own right-click commands, one .toml file each)', keys: [], run: (a) => a.openActionsFolder() },
+  { id: 'reloadActions', group: 'Settings', label: 'Reload actions', keys: [], run: (a) => a.loadActions(true) },
 
   { id: 'down', group: 'Move', label: 'Next item', keys: ['ArrowDown'], vim: ['ArrowDown', 'J'], extend: true, run: (a, e) => a.pane().step(0, 1, e.shiftKey) },
   { id: 'up', group: 'Move', label: 'Previous item', keys: ['ArrowUp'], vim: ['ArrowUp', 'K'], extend: true, run: (a, e) => a.pane().step(0, -1, e.shiftKey) },
@@ -105,6 +109,12 @@ export const ACTIONS = [
   { id: 'jump', group: 'Find and go', label: 'Jump to a pin, alias, place or recent folder', keys: [':'], run: (a) => a.jump() },
   { id: 'palette', group: 'Find and go', label: 'Command palette: find and run any command', keys: ['Ctrl+Shift+P'], run: (a) => a.palette() },
   { id: 'quickLook', group: 'Find and go', label: 'Quick look: large preview of the item under the cursor', keys: ['Space'], run: (a, e) => e?.repeat || a.quickLook() },
+  { id: 'searchText', group: 'Find and go', label: 'Search inside files (the Contents switch of the search box)', keys: ['Ctrl+Alt+F'], run: (a) => a.pane().searchText() },
+  { id: 'searchCase', group: 'Find and go', label: 'Search inside files: match case on / off', keys: ['Alt+C'], run: (a) => a.pane().toggleCase() },
+
+  ...TAG_COLOURS.map((c, i) => ({ id: `tag-${c}`, group: 'Tags', label: `Tag ${c}`, keys: [`Alt+${i + 1}`], run: (a) => a.setTag(c) })),
+  { id: 'tagNone', group: 'Tags', label: 'Remove the tag', keys: ['Alt+0'], run: (a) => a.setTag(null) },
+  ...TAG_COLOURS.map((c) => ({ id: `showTag-${c}`, group: 'Tags', label: `Show everything tagged ${c}`, keys: [], run: (a) => a.goPlace(TAGS + c) })),
 ];
 
 // "Ctrl+Shift+N", "Alt+ArrowUp", "?" … Shift is dropped for symbols (it is already in the character), kept for letters and digits.

@@ -21,6 +21,7 @@ zip = { version = "2", default-features = false, features = ["deflate", "chrono"
 chrono = "0.4"
 tauri-plugin-single-instance = "2"
 base64 = "0.23" # already in the tree through tauri
+toml = "1" # custom action files; already in the tree through tauri-utils
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5" # same crate the single-instance plugin already brings in
