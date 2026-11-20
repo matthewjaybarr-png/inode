@@ -13,6 +13,7 @@ Status: early. It works day to day, but expect rough edges.
 - Preview pane for text, images and PDFs; search in a folder and below it.
 - Copy, cut and paste with other apps; drag and drop; new file and folder; rename.
 - Trash with restore, a Trash place and a Recent place; undo and redo.
+- Folder aliases (`@name` in the path bar), breadcrumb drop-downs, a details pane, settings export and import.
 - Compress to zip; extract zip, 7z, tar and rar (through `bsdtar`).
 - Follows the Omarchy theme live.
 - Can be the default file manager: "Show in folder" from browsers opens Inode.
