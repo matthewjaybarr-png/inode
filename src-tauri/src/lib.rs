@@ -381,6 +381,10 @@ pub fn run() {
             open_window(app, arg_path(args, cwd), None);
         }
     };
+    #[cfg(target_os = "linux")]
+    if std::env::args().any(|a| a == "--service") {
+        dbus::claim();
+    }
     tauri::Builder::default()
         // A second `inode [path]` hands its arguments to the running one, which opens the window.
         .plugin(tauri_plugin_single_instance::init(move |app, args, cwd| launch(app, &args, &cwd)))

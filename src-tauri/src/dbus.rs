@@ -32,10 +32,25 @@ impl FileManager {
     }
 }
 
+static EARLY: std::sync::OnceLock<zbus::blocking::Connection> = std::sync::OnceLock::new();
+
+/// Takes the chooser's bus name before the toolkit starts. xdg-desktop-portal starts `inode --service` and waits for
+/// this name while it is itself still starting; the toolkit's start-up asks that same portal for settings, so claiming
+/// the name only in `serve` left each waiting on the other until the portal gave up (25 s) with no file chooser.
+pub fn claim() {
+    let Ok(c) = zbus::blocking::Connection::session() else { return };
+    // The object goes up before the name: the portal calls it the moment the name appears.
+    if c.object_server().at(crate::portal::PATH, crate::portal::chooser_early()).is_ok() {
+        let _ = c.request_name_with_flags(crate::portal::NAME, zbus::fdo::RequestNameFlags::DoNotQueue.into());
+    }
+    let _ = EARLY.set(c);
+}
+
 /// Serves the interface for as long as the app runs. No bus, or another file manager already owning the name: carry on without.
 pub fn serve(app: &AppHandle) {
     app.manage(crate::portal::Picks::default());
-    let Ok(conn) = zbus::blocking::Connection::session() else { return };
+    let _ = crate::portal::APP.set(app.clone());
+    let conn = match EARLY.get() { Some(c) => c.clone(), None => { let Ok(c) = zbus::blocking::Connection::session() else { return }; c } };
     if conn.object_server().at("/org/freedesktop/FileManager1", FileManager(app.clone())).is_ok() {
         // DoNotQueue and no ReplaceExisting: a running file manager keeps the name.
         let _ = conn.request_name_with_flags("org.freedesktop.FileManager1", zbus::fdo::RequestNameFlags::DoNotQueue.into());

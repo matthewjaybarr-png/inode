@@ -194,6 +194,21 @@ impl Chooser {
 #[derive(Default)]
 pub struct Picks(pub std::sync::Mutex<HashMap<String, (Request, Tx)>>);
 
+pub static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+/// The chooser registered before the app exists (see `dbus::claim`): a call that arrives in that first moment waits for the app.
+pub fn chooser_early() -> Chooser {
+    Chooser(Box::new(|req, tx| {
+        // shortcut: sleeps on the bus thread for the app's start-up (a fraction of a second), move to a channel if start-up ever does slow work
+        for _ in 0..600 {
+            if let Some(app) = APP.get() { return (chooser(app).0)(req, tx); }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let _ = tx.try_send(None); // the app never came up: answer "cancelled" rather than hang the caller
+        Box::new(|| {})
+    }))
+}
+
 /// The chooser that opens real windows: an Inode window titled "Inode: <the caller's title>" (so a window rule can
 /// float it), started in the folder the caller named, which finds its request with the `pick_request` command.
 pub fn chooser(app: &tauri::AppHandle) -> Chooser {
