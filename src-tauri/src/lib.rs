@@ -7,6 +7,7 @@ mod fs;
 mod ops;
 #[cfg(target_os = "linux")]
 pub mod setup;
+mod shell;
 
 use tauri::{Emitter, Manager};
 
@@ -141,10 +142,10 @@ async fn conflicts(sources: Vec<String>, dest: String) -> Vec<String> {
     ops::conflicts(&sources, &dest)
 }
 
-/// Puts the files on the system clipboard for other apps (see clip.rs for what each platform is given).
+/// Puts the files on the system clipboard for other apps (see clip.rs for what each platform is given); `mv` = it is a cut.
 #[tauri::command]
-async fn clip_write(paths: Vec<String>, uris: String) -> R<()> {
-    tauri::async_runtime::spawn_blocking(move || clip::write(&paths, &uris)).await.map_err(|e| e.to_string())?
+async fn clip_write(paths: Vec<String>, uris: String, mv: bool) -> R<()> {
+    tauri::async_runtime::spawn_blocking(move || clip::write(&paths, &uris, mv)).await.map_err(|e| e.to_string())?
 }
 
 /// The files on the system clipboard as file: URI lines ("" = none); Err when it cannot be read at all.
@@ -340,7 +341,7 @@ pub fn run() {
             launch(app.handle(), &std::env::args().collect::<Vec<_>>(), &cwd.to_string_lossy());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![new_window, theme_choice, set_theme_choice, list_dir, places, open_path, open_terminal, startup_path, desktop::desktop_theme, conflicts, transfer, move_back, rename_path, new_item, extract, undo_extract, trash_restore, trash_purge, trash, has_bin, remove_empty, restore, delete_paths, read_text, probe, search, eject, props, save_settings, apps_for, open_with, compress, clip_write, clip_read, same_device])
+        .invoke_handler(tauri::generate_handler![new_window, theme_choice, set_theme_choice, list_dir, places, open_path, open_terminal, startup_path, desktop::desktop_theme, conflicts, transfer, move_back, rename_path, new_item, extract, undo_extract, trash_restore, trash_purge, trash, has_bin, remove_empty, restore, delete_paths, read_text, probe, search, eject, props, save_settings, apps_for, open_with, compress, clip_write, clip_read, same_device, shell::make_link, shell::link_dir, shell::thumb, shell::drag_out])
         .run(tauri::generate_context!())
         .expect("error while running Inode");
 }

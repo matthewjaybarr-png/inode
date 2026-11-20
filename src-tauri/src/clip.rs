@@ -15,7 +15,7 @@ fn file_type(offered: &str) -> Option<&'static str> {
 /// shortcut: one clipboard type, so no cut flag for other apps; offer both from an own Wayland data source
 /// (wl-clipboard-rs) if moving by cut and paste into Nautilus is wanted.
 #[cfg(not(windows))]
-pub fn write(_paths: &[String], uris: &str) -> R<()> {
+pub fn write(_paths: &[String], uris: &str, _mv: bool) -> R<()> {
     use std::{io::Write, os::unix::process::CommandExt, process::Stdio};
     // Its own process group and no pipes left open: wl-copy forks a holder that keeps serving the clipboard after
     // this returns, and after Inode quits. The parent exits once the clipboard is set, so wait() is short.
@@ -51,7 +51,7 @@ pub fn read() -> R<String> {
 fn powershell(script: &str, paths: &str) -> R<String> {
     use std::os::windows::process::CommandExt;
     let o = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .args(["-NoProfile", "-NonInteractive", "-STA", "-Command", script]) // the clipboard needs an STA thread
         .env("INODE_CLIP", paths)
         .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
         .output()
@@ -59,18 +59,33 @@ fn powershell(script: &str, paths: &str) -> R<String> {
     if o.status.success() { Ok(String::from_utf8_lossy(&o.stdout).into_owned()) } else { Err(String::from_utf8_lossy(&o.stderr).trim().to_string()) }
 }
 
-// shortcut: Set-Clipboard cannot set "Preferred DropEffect", so a Cut from Inode pasted into Explorer behaves as a
-// copy (inside Inode it stays a cut), and a selection whose paths pass 32,767 characters (one environment variable)
-// stays in-app only. Upgrade: the OLE clipboard (CF_HDROP + Preferred DropEffect) through the `windows` crate.
+// The file list (CF_HDROP) plus "Preferred DropEffect" (2 = move, 5 = copy), which is how Explorer tells a cut
+// from a copy. SetDataObject(.., $true) leaves the data on the clipboard after this PowerShell exits.
+// shortcut: a selection whose paths pass 32,767 characters (one environment variable) stays in-app only; write
+// the OLE clipboard through the `windows` crate if that is ever hit.
 #[cfg(windows)]
-pub fn write(paths: &[String], _uris: &str) -> R<()> {
-    powershell("Set-Clipboard -LiteralPath ($env:INODE_CLIP -split [char]10) -ErrorAction Stop", &paths.join("\n")).map(|_| ())
+pub fn write(paths: &[String], _uris: &str, mv: bool) -> R<()> {
+    let script = format!(
+        "Add-Type -AssemblyName System.Windows.Forms; $c = New-Object System.Collections.Specialized.StringCollection; \
+         $c.AddRange([string[]]($env:INODE_CLIP -split [char]10)); $d = New-Object System.Windows.Forms.DataObject; $d.SetFileDropList($c); \
+         $d.SetData('Preferred DropEffect', (New-Object System.IO.MemoryStream (,[byte[]]({},0,0,0)))); \
+         [System.Windows.Forms.Clipboard]::SetDataObject($d, $true)",
+        if mv { 2 } else { 5 }
+    );
+    powershell(&script, &paths.join("\n")).map(|_| ())
 }
 
-/// One percent-encoded (so plain ASCII, whatever the console code page) file: URI per copied file.
+/// A first line "cut" when Explorer (or Inode) cut the files, then one percent-encoded (so plain ASCII, whatever
+/// the console code page) file: URI per file: the same shape util.js fromUris reads on Linux.
 #[cfg(windows)]
 pub fn read() -> R<String> {
-    powershell("Get-Clipboard -Format FileDropList | ForEach-Object { 'file:' + [uri]::EscapeDataString($_.FullName.Replace('\\', '/')) }", "")
+    powershell(
+        "Add-Type -AssemblyName System.Windows.Forms; $d = [System.Windows.Forms.Clipboard]::GetDataObject(); \
+         if ($d -and $d.GetDataPresent('FileDrop')) { $e = $d.GetData('Preferred DropEffect'); \
+         if ($e -is [System.IO.Stream] -and ($e.ReadByte() -band 2)) { 'cut' }; \
+         $d.GetData('FileDrop') | ForEach-Object { 'file:' + [uri]::EscapeDataString($_.Replace('\\', '/')) } }",
+        "",
+    )
 }
 
 #[cfg(test)]

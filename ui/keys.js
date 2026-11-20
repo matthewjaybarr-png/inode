@@ -53,6 +53,7 @@ export const ACTIONS = [
   { id: 'paste', group: 'Files', label: 'Paste here', keys: ['Ctrl+V'], vim: ['Ctrl+V', 'Shift+P'], run: (a) => a.ops.paste() },
   { id: 'copyPath', group: 'Files', label: 'Copy path', keys: ['Ctrl+Alt+Shift+C'], run: (a) => a.copyPath() },
   { id: 'terminal', group: 'Files', label: 'Open in terminal', keys: ['Ctrl+Alt+T'], run: (a) => a.openTerminal() },
+  { id: 'shortcut', group: 'Files', label: 'Create shortcut (Linux: a link)', keys: ['Ctrl+Shift+L'], run: (a) => a.ops.shortcut() },
   { id: 'compress', group: 'Files', label: 'Compress to .zip', keys: [], run: (a) => a.ops.compress() },
   { id: 'extractHere', group: 'Files', label: 'Extract archive here', keys: ['Alt+E'], run: (a) => a.ops.extract(false) },
   { id: 'extractTo', group: 'Files', label: 'Extract archive to its own folder', keys: ['Alt+Shift+E'], run: (a) => a.ops.extract(true) },

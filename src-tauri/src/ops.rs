@@ -262,7 +262,8 @@ pub fn delete(paths: &[String]) -> R<()> {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Trashed {
     pub original: String,
-    /// Linux: the file inside Trash/files. Windows: empty (found again by scanning the Recycle Bin).
+    /// Linux: the file inside Trash/files. Windows: the $R file when listed from the Recycle Bin, empty in a
+    /// delete's undo record (found again by scanning the bin).
     pub stored: String,
     pub info: String,
 }
@@ -298,7 +299,10 @@ fn picked(stored: Option<&[String]>) -> Vec<Trashed> {
 
 /// Restore from the Trash view; same rules as `restore`.
 pub fn restore_stored(stored: Option<&[String]>) -> R<Vec<String>> {
-    restore(&picked(stored))
+    let r = restore(&picked(stored));
+    #[cfg(windows)]
+    platform::bin_changed();
+    r
 }
 
 /// Deletes trashed items for good (None = empty the trash); returns how many went.
@@ -308,6 +312,8 @@ pub fn purge(stored: Option<&[String]>) -> R<usize> {
         remove(Path::new(&t.stored))?;
         let _ = std::fs::remove_file(&t.info);
     }
+    #[cfg(windows)]
+    platform::bin_changed();
     Ok(items.len())
 }
 
@@ -511,6 +517,24 @@ mod platform {
     }
 }
 
+/// Original path and deletion time (FILETIME) from a Recycle Bin $I file (format 1: fixed 260 chars; format 2:
+/// length-prefixed).
+#[cfg(any(windows, test))]
+fn read_i(b: &[u8]) -> Option<(String, i64)> {
+    let ver = i64::from_le_bytes(b.get(0..8)?.try_into().ok()?);
+    let when = i64::from_le_bytes(b.get(16..24)?.try_into().ok()?);
+    let units: Vec<u16> = match ver {
+        1 => b.get(24..24 + 520)?.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(),
+        2 => {
+            let n = u32::from_le_bytes(b.get(24..28)?.try_into().ok()?) as usize;
+            b.get(28..28 + n * 2)?.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect()
+        }
+        _ => return None,
+    };
+    let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
+    Some((String::from_utf16_lossy(&units[..end]), when))
+}
+
 #[cfg(windows)]
 mod platform {
     //! Recycle Bin through the shell (per-user, no admin). Undo finds the item again from its $I record.
@@ -582,29 +606,46 @@ mod platform {
         Ok(Trashed { original: s(&p), stored: String::new(), info: String::new() })
     }
 
-    /// Original path and deletion time from a $I file (format 1: fixed 260 chars; format 2: length-prefixed).
-    pub fn read_i(b: &[u8]) -> Option<(String, i64)> {
-        let ver = i64::from_le_bytes(b.get(0..8)?.try_into().ok()?);
-        let when = i64::from_le_bytes(b.get(16..24)?.try_into().ok()?);
-        let units: Vec<u16> = match ver {
-            1 => b.get(24..24 + 520)?.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(),
-            2 => {
-                let n = u32::from_le_bytes(b.get(24..28)?.try_into().ok()?) as usize;
-                b.get(28..28 + n * 2)?.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect()
-            }
-            _ => return None,
-        };
-        let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
-        Some((String::from_utf16_lossy(&units[..end]), when))
-    }
-
-    /// Not listed in the app yet: the sidebar opens Explorer's Recycle Bin instead.
+    /// Every item in this user's Recycle Bin, on every drive that has one.
+    // Reads the $I/$R pairs in <drive>:\$Recycle.Bin\<SID> directly: undo already restores that way, and it needs
+    // no COM or PowerShell. Restore and Delete forever then are a plain rename / remove of the $R file.
     pub fn items() -> Vec<(Trashed, f64)> {
-        Vec::new()
+        let mut out = Vec::new();
+        // Tests empty "the Trash": never let one reach the real Recycle Bin.
+        if cfg!(test) {
+            return out;
+        }
+        for drive in crate::fs::drives().into_iter().filter(|d| has_bin(Path::new(d))) {
+            // Only the current user's SID folder is readable; the others fail and are skipped.
+            for sid in std::fs::read_dir(Path::new(&drive).join("$Recycle.Bin")).into_iter().flatten().flatten() {
+                out.extend(std::fs::read_dir(sid.path()).into_iter().flatten().flatten().filter_map(|f| {
+                    let n = f.file_name().to_string_lossy().into_owned();
+                    let stored = f.path().with_file_name(format!("$R{}", n.strip_prefix("$I")?));
+                    stored.symlink_metadata().ok()?;
+                    let (original, when) = read_i(&std::fs::read(f.path()).ok()?)?;
+                    // FILETIME (100 ns ticks since 1601) to ms since 1970.
+                    Some((Trashed { original, stored: s(&stored), info: s(&f.path()) }, (when / 10_000 - 11_644_473_600_000) as f64))
+                }));
+            }
+        }
+        out
     }
 
-    /// The newest $R/$I pair recorded for the original path.
+    #[link(name = "shell32")]
+    extern "system" {
+        fn SHUpdateRecycleBinIcon();
+    }
+    /// Explorer's bin icon (full / empty) does not notice files leaving the bin behind its back.
+    pub fn bin_changed() {
+        unsafe { SHUpdateRecycleBinIcon() }
+    }
+
+    /// Where the item sits in the bin: as listed (Recycle Bin view), else the newest $R/$I pair recorded for the
+    /// original path (undo of a delete).
     pub fn find(t: &Trashed) -> R<(PathBuf, PathBuf)> {
+        if !t.stored.is_empty() {
+            return if Path::new(&t.stored).symlink_metadata().is_ok() { Ok((PathBuf::from(&t.stored), PathBuf::from(&t.info))) } else { Err(format!("{} is no longer in the Recycle Bin", t.original)) };
+        }
         let root = Path::new(&t.original).components().next().map(|c| PathBuf::from(c.as_os_str()).join("\\$Recycle.Bin")).ok_or("Bad path")?;
         let mut best: Option<(i64, PathBuf)> = None;
         // Only the current user's SID folder is readable; the others fail and are skipped.
@@ -925,6 +966,19 @@ mod tests {
         assert_eq!(purge(None).unwrap(), 1);
         assert!(trash_items().is_empty() && !d.join("doc 1 (2).txt").exists());
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn recycle_bin_record_gives_path_and_time() {
+        let path = "C:\\Users\\m\\caf\u{e9}.txt";
+        let name: Vec<u8> = path.encode_utf16().chain(Some(0)).flat_map(u16::to_le_bytes).collect();
+        let head = |ver: i64| [ver.to_le_bytes(), 5i64.to_le_bytes(), 134_000_000_000_000_000i64.to_le_bytes()].concat();
+        let v2 = [head(2), ((name.len() / 2) as u32).to_le_bytes().to_vec(), name.clone()].concat();
+        assert_eq!(read_i(&v2), Some((path.into(), 134_000_000_000_000_000)));
+        let mut v1 = [head(1), name].concat();
+        v1.resize(24 + 520, 0);
+        assert_eq!(read_i(&v1).unwrap().0, path);
+        assert_eq!((read_i(&v2[..30]), read_i(&head(3)), read_i(b"")), (None, None, None));
     }
 
     #[test]

@@ -261,8 +261,11 @@ export class Pane {
     const e = this.rows[i];
     if (!e) return;
     if (this.path === TRASH) return this.app.flash(`Restore "${e.name}" to open it: right-click it, or Alt+R`);
+    const open = () => invoke('open_path', { path: e.path }).catch((err) => this.app.flash(String(err)));
     if (e.dir) this.go(e.path);
-    else invoke('open_path', { path: e.path }).catch((err) => this.app.flash(String(err)));
+    // A Windows shortcut to a folder opens that folder here, not in Explorer.
+    else if (WIN && /\.lnk$/i.test(e.name)) invoke('link_dir', { path: e.path }).then((dir) => (dir ? this.go(dir) : open()), open);
+    else open();
   }
 
   editPath() {

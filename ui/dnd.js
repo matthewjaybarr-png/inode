@@ -4,7 +4,7 @@
 //   Linux    rows drag with HTML5 events (other apps accept them too). The drop itself comes back as the native
 //            event when the drag carries files, as an HTML5 `drop` otherwise: both end in drop() below.
 //   Windows  native drag-drop switches HTML5 dragging off inside WebView2, so rows drag with pointer events.
-//            shortcut: no drag out to other apps on Windows, that needs a native drag source (OLE DoDragDrop).
+//            Past the window's edge the drag is handed to the system (drag_out), so Explorer and other apps take it.
 import { TRASH, BIN, WIN, isFolder, placeName, toUriList, fromUris, dropRefusal } from './util.js';
 
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
@@ -24,7 +24,7 @@ export function setupDnd(app) {
   // The drop target under an element: { el (what lights up), path (TRASH = the bin), file (a pinned file) }.
   function target(at) {
     const place = at?.closest?.('.place[data-drop]'), tab = at?.closest?.('.tab'), pane = app.panes.find((p) => p.root.contains(at));
-    if (place || tab) { const el = place || tab, path = el.dataset.drop; return { el, path: path.startsWith('shell:') ? TRASH : path, file: el.dataset.kind === 'file' }; }
+    if (place || tab) { const el = place || tab, path = el.dataset.drop; return { el, path, file: el.dataset.kind === 'file' }; }
     if (!pane || pane.path == null) return null;
     const row = pane.path !== TRASH && at.closest?.('.item.dir');
     return row ? { el: row, path: pane.rows[row.dataset.i].path } : { el: pane.root, path: pane.path };
@@ -90,8 +90,21 @@ export function setupDnd(app) {
     addEventListener('pointerdown', (e) => {
       const row = e.button === 0 && !e.target.closest?.('input') && e.target.closest?.('.item');
       if (!row) return;
-      const stop = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
       const under = (ev) => document.elementFromPoint(ev.clientX, ev.clientY);
+      const stop = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); document.documentElement.removeEventListener('pointerleave', leave); };
+      // Out of the window with the button still down: end our own drag and start a system one with the same files.
+      // `drag` stays set meanwhile, so coming back and dropping in Inode still counts as our own rows (the drop
+      // then arrives as the native event above).
+      const out = () => {
+        const paths = drag;
+        stop(); calm(); seen = null;
+        invoke('drag_out', { paths }).catch((err) => app.flash(`Could not drag out of the window: ${err}`)).finally(() => {
+          if (drag === paths) drag = null;
+          calm(); app.panes.forEach((p) => p.refresh()); // the other app may have moved them away
+        });
+      };
+      const outside = (ev) => ev.clientX < 0 || ev.clientY < 0 || ev.clientX >= innerWidth || ev.clientY >= innerHeight;
+      const leave = (ev) => { if (drag && ev.buttons) out(); };
       const move = (ev) => {
         if (!ev.buttons) { stop(); drag = seen = null; return calm(); } // released outside the window
         if (!drag) {
@@ -99,10 +112,11 @@ export function setupDnd(app) {
           dev.clear();
           if (!(drag = rowPaths(row))) return stop();
         }
+        if (outside(ev)) return out();
         hover(under(ev), ev);
       };
       const up = (ev) => { stop(); if (drag) drop(under(ev), ev, drag); };
-      addEventListener('pointermove', move); addEventListener('pointerup', up);
+      addEventListener('pointermove', move); addEventListener('pointerup', up); document.documentElement.addEventListener('pointerleave', leave);
     });
     return;
   }

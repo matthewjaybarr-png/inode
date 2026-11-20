@@ -128,8 +128,8 @@ export function setupOps(app) {
       src.selected.clear();
     },
 
-    // Cut/Copy remember paths inside the app and put them on the system clipboard for other apps (which see a copy:
-    // only this app knows it was a cut). Paste copies or moves into the active pane's folder.
+    // Cut/Copy remember paths inside the app and put them on the system clipboard for other apps (Explorer is told
+    // cut or copy; on Linux other apps see a copy). Paste copies or moves into the active pane's folder.
     clip(mv) {
       const p = app.pane(), paths = p.targets();
       if (!paths.length || !p.path) return;
@@ -137,7 +137,7 @@ export function setupOps(app) {
       const c = clip = { paths, mv };
       spent = null;
       // `local` = the system clipboard could not be set (no wl-copy, X11 session): the in-app clip still pastes here.
-      c.pub = invoke('clip_write', { paths, uris: toUriList(paths) }).catch(() => { c.local = true; });
+      c.pub = invoke('clip_write', { paths, uris: toUriList(paths), mv }).catch(() => { c.local = true; });
       app.flash(`${mv ? 'Cut' : 'Copied'} ${plural(paths.length, 'item')} · Ctrl+V pastes`);
     },
 
@@ -151,7 +151,7 @@ export function setupOps(app) {
       if (!c) return app.flash('Nothing to paste: Ctrl+C or Ctrl+X some items first, here or in another app');
       if (c.mv && c.paths.every((s) => sameDir(parentOf(s), dest))) return app.flash('Already in this folder');
       if (c === sys && spent && sys.paths.length === spent.length && sys.paths.every((p, i) => p === spent[i])) return app.flash('Nothing to paste: that cut was already pasted');
-      if (c.mv && c === clip) { spent = clip.paths; clip = null; } // a cut pastes once, like Explorer
+      if (c.mv) { spent = c.paths; if (c === clip) clip = null; } // a cut (ours or Explorer's) pastes once, like Explorer
       await send(c.paths, dest, c.mv);
     },
 
@@ -298,6 +298,26 @@ export function setupOps(app) {
         await invoke('delete_paths', { paths });
         app.flash(`Deleted ${what}`);
       });
+    },
+
+    // A shortcut (Windows: "name - Shortcut.lnk", Linux: the symlink "Link to name") beside each selected item.
+    // Undo sends the shortcuts to the bin; the items themselves are never touched.
+    shortcut() {
+      const p = app.pane(), paths = p.targets();
+      if (!paths.length || !inFolder(p, 'make a shortcut in it')) return;
+      const run = async (redone) => {
+        const made = [];
+        try { for (const path of paths) made.push(await invoke('make_link', { path })); } finally {
+          if (made.length) {
+            pushUndo(`shortcut to ${plural(made.length, 'item')}`, async () => {
+              const { failed } = await invoke('trash', { paths: made });
+              if (failed.length) throw failed.join(' · ');
+            }, run, redone);
+          }
+        }
+        app.flash(`Made ${made.length === 1 ? baseName(made[0]) : plural(made.length, 'shortcut')} · Ctrl+Z removes ${made.length === 1 ? 'it' : 'them'}`);
+      };
+      enqueue(`Making ${plural(paths.length, 'shortcut')}`, run);
     },
 
     // Zip the selection beside it; progress shows in the same bar as copies.
