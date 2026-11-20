@@ -282,5 +282,29 @@ kbd { font: 11px ui-monospace, Consolas, monospace; padding: 1px 6px; border: 1p
 #pick-bar select { max-width: 40%; height: 28px; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
 #pick-bar button { padding: 3px 14px; border-radius: 5px; border: 1px solid var(--border); color: var(--text); background: var(--surface); }
 #pick-bar button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-body.picking #btn-dual, body.picking #btn-swap, body.picking #btn-copy, body.picking #btn-move, body.picking #status-tools .sep { display: none; }
+body.picking #btn-dual, body.picking #btn-swap, body.picking #btn-copy, body.picking #btn-move, body.picking #btn-trash, body.picking #status-tools .sep { display: none; }
 #prompt .path-input { flex: 0 1 240px; margin: 0; height: 26px; }
+
+/* Colour tags: seven colours of their own, readable on light and on dark surfaces (theme.js marks a desktop theme's side). */
+:root { --tag-red: #D6453D; --tag-orange: #D9822B; --tag-yellow: #C9A227; --tag-green: #2E9A5A; --tag-blue: #3D7FD9; --tag-purple: #9159D6; --tag-grey: #7C7A75; }
+@media (prefers-color-scheme: dark) {
+  :root { --tag-red: #F0776E; --tag-orange: #F2A65A; --tag-yellow: #EBCB55; --tag-green: #5CCB88; --tag-blue: #72A9F5; --tag-purple: #B68CF2; --tag-grey: #A9A6A0; }
+}
+:root[data-desktop-theme="light"] { --tag-red: #D6453D; --tag-orange: #D9822B; --tag-yellow: #C9A227; --tag-green: #2E9A5A; --tag-blue: #3D7FD9; --tag-purple: #9159D6; --tag-grey: #7C7A75; }
+:root[data-desktop-theme="dark"] { --tag-red: #F0776E; --tag-orange: #F2A65A; --tag-yellow: #EBCB55; --tag-green: #5CCB88; --tag-blue: #72A9F5; --tag-purple: #B68CF2; --tag-grey: #A9A6A0; }
+.tag-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; display: inline-block; box-shadow: 0 0 0 1px var(--surface); }
+#sidebar .place .tag-dot { margin: 0 11px 0 3px; }
+#side-menu .tag-row { display: flex; align-items: center; gap: 2px; padding: 3px 6px; }
+#side-menu .tag-row button { width: auto; padding: 5px; gap: 0; }
+#side-menu .tag-row .tag-dot { width: 14px; height: 14px; }
+#side-menu .tag-row .on { box-shadow: inset 0 0 0 1px var(--accent); }
+#side-menu .tag-row .none { margin-left: auto; padding: 3px 8px; color: var(--muted); }
+/* Search box switches: Contents (look inside files) and Match case. */
+.search-input { min-width: 80px; }
+.find-opts { display: flex; align-items: center; gap: 4px; margin-left: 4px; flex: none; }
+.find-opt { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: 5px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.find-opt:hover { background: var(--hover); color: var(--text); }
+.find-opt[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); border-color: var(--accent); }
+.find-opt input { margin: 0; }
+.c-name .where.hit { flex: 3 1 0; font-style: italic; }
+.key-row select.opt { max-width: 220px; }

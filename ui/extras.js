@@ -86,6 +86,7 @@ export function setupExtras(app) {
     const all = ACTIONS.filter((a) => a.id !== 'palette').map((a) => ({
       text: `${a.group}: ${a.label}`, hint: keysFor(a, app.state.preset, app.state.keys).map(label).join('  '), run: () => a.run(app, {}),
     }));
+    all.push(...app.actionItems().filter(Boolean).map(([text, run]) => ({ text: `Action: ${text}`, hint: 'custom action', run })));
     pick('Run a command: type part of its name', (q) => fuzzyRank(q, all, (x) => x.text), 'Enter runs it on the active pane · Esc closes');
   };
 

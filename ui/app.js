@@ -4,6 +4,7 @@ import { extOf, kindOf, formatSize, formatDate, formatMode, sidebarModel, moved,
 import { followDesktopTheme, openThemePicker } from './theme.js';
 import { setupOps } from './ops.js';
 import { setupExtras } from './extras.js';
+import { setupAddons } from './addons.js';
 import { setupDnd } from './dnd.js';
 import { icon, iconFor } from './icons.js';
 import { ACTIONS, PRESETS, buildMap, lookup, keysFor, comboOf, label } from './keys.js';
@@ -13,13 +14,13 @@ import { setupPick } from './pick.js';
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
 const $ = (s) => document.querySelector(s);
 
-import { IMAGES, VIEW_DEFAULTS, COLUMNS, shownCols, WIN } from './util.js';
+import { IMAGES, VIEW_DEFAULTS, COLUMNS, shownCols, WIN, TAGS } from './util.js';
 const note = (t) => Object.assign(document.createElement('div'), { className: 'pv-note', textContent: t });
 const STORE = 'folyren-files:state';
 const TRASH_LABEL = `Delete (to ${BIN})`;
-const defaults = { sort: { key: 'name', reverse: false }, hidden: false, dual: true, split: 0.5, focus: 0, paths: [], tabs: [], pins: [], side: { hide: [], fold: ['Places', 'Drives'], v: 1 }, manage: false, preview: false, cols: {}, pvw: 320, preset: 'default', keys: {}, aliases: {}, askBin: false, warnExt: true, recents: [], restoreTabs: true };
+const defaults = { sort: { key: 'name', reverse: false }, hidden: false, dual: true, split: 0.5, focus: 0, paths: [], tabs: [], pins: [], side: { hide: [], fold: ['Places', 'Drives'], v: 1 }, manage: false, preview: false, cols: {}, pvw: 320, preset: 'default', keys: {}, aliases: {}, askBin: false, warnExt: true, recents: [], restoreTabs: true, actionOpts: {} };
 // What every window shares; the rest (tabs, layout) is each window's own. See the 'storage' listener in start().
-const SHARED = ['pins', 'side', 'keys', 'preset', 'aliases', 'recents', 'askBin', 'warnExt', 'restoreTabs', 'folders'];
+const SHARED = ['pins', 'side', 'keys', 'preset', 'aliases', 'recents', 'askBin', 'warnExt', 'restoreTabs', 'folders', 'actionOpts'];
 // Places and Drives start folded (a busy sidebar is hard to scan); v marks profiles that already got that default once.
 const fresh = (s) => (s.side?.v ? s : { ...s, side: { hide: s.side?.hide || [], fold: [...new Set([...(s.side?.fold || []), 'Places', 'Drives'])], v: 1 } });
 const load = () => { try { return fresh({ ...defaults, ...JSON.parse(localStorage.getItem(STORE) || '{}') }); } catch { return { ...defaults }; } };
@@ -136,6 +137,7 @@ const app = {
     file.title = ok ? `New file in ${p.path} (Ctrl+Alt+N)` : off;
     $('#act-where').textContent = ok ? `${this.state.dual ? `${this.active ? 'Right' : 'Left'} pane: ` : ''}${p.path}${n ? ` · ${n} to delete` : ' · nothing selected'}`
       : bin ? `${BIN}: right-click an item to restore it; right-click empty space to restore everything or empty it`
+        : p.path.startsWith(TAGS) ? 'Tagged items, wherever they are: right-click one to open its folder or change its tag. Nothing can be made here.'
         : p.path === RECENT ? 'Recent: files used lately, newest first; right-click one to open its folder. Nothing can be made here.'
           : 'This PC: open a drive or folder to make a new folder there';
   },
@@ -193,6 +195,7 @@ const app = {
         if (pl.kind === 'pin' || pl.kind === 'drive' || pl.kind === 'network') this.checkPin(pl.path, b, b.title);
       }
     }
+    this.tagPlaces?.(nav, flip); // the Tags section (addons.js)
     // Manage sidebar: always there, so what is hidden can always be found again.
     const m = el('button', 'group manage', hidden.length ? `Manage sidebar · ${hidden.length} hidden` : 'Manage sidebar');
     m.dataset.key = 'manage'; m.setAttribute('aria-expanded', String(this.state.manage));
@@ -267,7 +270,7 @@ const app = {
     const items = here === TRASH ? (entry
       ? [it('Restore', 'restore'), it('Delete permanently', 'deleteForever'), null, props()]
       : [it('Restore all', 'restoreAll', none), it(`Empty ${BIN}`, 'emptyTrash', none), null, it('Refresh', 'refresh')])
-      : here === RECENT ? (entry
+      : here === RECENT || here?.startsWith(TAGS) ? (entry
         ? [it('Open', 'open'), !entry.dir && own('Open with…', () => this.openWith(entry.path, ev)), it('Open containing folder', 'openFolder'), null,
            it('Copy', 'copy'), it('Copy path', 'copyPath'), it('Copy to other pane', 'copyOther', two), null, props()]
         : [it('Refresh', 'refresh')])
@@ -281,6 +284,7 @@ const app = {
          it('Open in terminal', 'terminal'), own('Copy folder path', () => this.copyPath([here])), it(pinned(here) ? 'Unpin this folder' : 'Pin this folder', 'pin'), it('Alias this folder…', 'alias'), null,
          it('Show / hide hidden items', 'hidden'), it(this.state.preview ? 'Hide preview' : 'Show preview', 'preview'), it('Refresh', 'refresh'), null,
          own('Folder properties', () => this.showProps({ name: here.split(/[\\/]/).filter(Boolean).pop() || here, path: here, dir: true }))];
+    if (entry && here !== TRASH) items.push(null, this.tagRow(), ...this.actionItems()); // colour tags, then the custom actions that fit (addons.js)
     this.popMenu({ left: ev.clientX, top: ev.clientY, bottom: ev.clientY }, items, this.pane().list);
   },
   // Shift+F10 / Menu key: the item menu at the cursor row (empty-space menu if the folder is empty).
@@ -340,13 +344,14 @@ const app = {
   openTerminal(dir = this.pane().path) {
     if (isFolder(dir)) invoke('open_terminal', { dir }).catch((e) => this.flash(`Could not open a terminal: ${e}`));
   },
-  // Small popup menu; items are [text, run, disabled, key], null for a separator. `back` gets focus on Escape.
+  // Small popup menu; items are [text, run, disabled, key], null for a separator, or a ready-made element (the tag row). `back` gets focus on Escape.
   popMenu(r, items, back) {
     this.closeSideMenu();
     const box = Object.assign(document.createElement('div'), { id: 'side-menu' });
     box.setAttribute('role', 'menu');
     for (const item of items.filter((x) => x !== false)) {
       if (!item) { box.append(document.createElement('hr')); continue; } // null = separator
+      if (item instanceof Node) { box.append(item); continue; }
       const [text, run, off, key] = item;
       const b = Object.assign(document.createElement('button'), { textContent: text, disabled: !!off, onclick: run });
       if (key) b.append(Object.assign(document.createElement('span'), { className: 'key', textContent: key }));
@@ -531,7 +536,7 @@ const app = {
         }
       };
       for (const a of ACTIONS) {
-        if (a.group !== group) { if (group === 'Settings') aliases(); group = a.group; body.append(Object.assign(document.createElement('h3'), { textContent: group })); }
+        if (a.group !== group) { if (group === 'Settings') { aliases(); this.actionRows(body); } group = a.group; body.append(Object.assign(document.createElement('h3'), { textContent: group })); }
         const row = document.createElement('div'); row.className = 'key-row';
         const ks = document.createElement('span'); ks.className = 'key-chips';
         for (const c of keysFor(a, this.state.preset, this.state.keys)) ks.append(Object.assign(document.createElement('kbd'), { textContent: label(c) }));
@@ -600,6 +605,7 @@ async function start() {
   app.renderPlaces(places);
   app.ops = setupOps(app);
   setupExtras(app);
+  setupAddons(app);
   setupDnd(app);
   setupNet(app);
   // Opened by the file chooser portal for another app's Open / Save dialog (Linux): the pick bar, and nothing saved.

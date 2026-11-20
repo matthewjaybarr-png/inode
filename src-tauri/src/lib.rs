@@ -13,6 +13,9 @@ mod portal;
 #[cfg(target_os = "linux")]
 pub mod setup;
 mod shell;
+mod actions;
+mod find;
+mod tags;
 
 use tauri::{Emitter, Manager};
 
@@ -334,6 +337,42 @@ async fn set_theme_choice(scope: String, value: Option<String>) -> Result<(), St
     choice::set_theme(scope == "app", value.as_deref())
 }
 
+/// Files under `root` whose text holds `query`: ripgrep when it is installed, else the built-in walker; at most 500.
+#[tauri::command]
+async fn search_text(root: String, query: String, hidden: bool, match_case: bool) -> R<find::Hits> {
+    tauri::async_runtime::spawn_blocking(move || find::search_text(&root, &query, hidden, match_case, 500, actions::on_path("rg"))).await.map_err(|e| e.to_string())?
+}
+
+/// Every colour tag (path -> colour). `dir` = the folder just listed: tags of items gone from it are dropped.
+#[tauri::command]
+async fn tags(dir: Option<String>) -> tags::Map {
+    tags::all(dir.as_deref())
+}
+
+/// Tags the paths `colour`, or untags them (none); returns the whole map.
+#[tauri::command]
+async fn set_tags(paths: Vec<String>, colour: Option<String>) -> R<tags::Map> {
+    tags::set(&paths, colour.as_deref())
+}
+
+/// The custom actions (actions.rs) that can run on this machine.
+#[tauri::command]
+async fn actions() -> Vec<actions::Action> {
+    tauri::async_runtime::spawn_blocking(actions::load).await.unwrap_or_default()
+}
+
+/// The user's actions folder, made (with an example) on first use.
+#[tauri::command]
+async fn actions_dir() -> R<String> {
+    actions::folder()
+}
+
+/// Runs a custom action on the paths, in `dir`; answers once it has ended (Err: it failed, with its exit code).
+#[tauri::command]
+async fn run_action(id: String, paths: Vec<String>, dir: String, option: Option<String>) -> R<String> {
+    tauri::async_runtime::spawn_blocking(move || actions::run(&id, &paths, &dir, option.as_deref())).await.map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // `--service` (D-Bus activation) runs with no window until a FileManager1 call asks for one.
@@ -353,7 +392,7 @@ pub fn run() {
             launch(app.handle(), &std::env::args().collect::<Vec<_>>(), &cwd.to_string_lossy());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![new_window, theme_choice, set_theme_choice, list_dir, places, open_path, open_terminal, startup_path, desktop::desktop_theme, conflicts, transfer, move_back, rename_path, new_item, extract, undo_extract, trash_restore, trash_purge, trash, has_bin, remove_empty, restore, delete_paths, read_text, probe, search, eject, props, save_settings, apps_for, open_with, compress, clip_write, clip_read, same_device, shell::make_link, shell::link_dir, shell::thumb, shell::drag_out, dir_counts, desk::pick_request, desk::pick_done, desk::connect, desk::unlock])
+        .invoke_handler(tauri::generate_handler![new_window, theme_choice, set_theme_choice, list_dir, places, open_path, open_terminal, startup_path, desktop::desktop_theme, conflicts, transfer, move_back, rename_path, new_item, extract, undo_extract, trash_restore, trash_purge, trash, has_bin, remove_empty, restore, delete_paths, read_text, probe, search, eject, props, save_settings, apps_for, open_with, compress, clip_write, clip_read, same_device, shell::make_link, shell::link_dir, shell::thumb, shell::drag_out, dir_counts, search_text, tags, set_tags, actions, actions_dir, run_action, desk::pick_request, desk::pick_done, desk::connect, desk::unlock])
         .run(tauri::generate_context!())
         .expect("error while running Inode");
 }

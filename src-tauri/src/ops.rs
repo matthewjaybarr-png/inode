@@ -174,6 +174,9 @@ pub fn transfer(sources: &[String], dest: &str, mv: bool, policy: Policy, report
             }
         }
         if mv { move_one(src, &to, &mut pr)? } else { copy_tree(src, &to, &mut pr)? }
+        if mv {
+            crate::tags::moved(&s(src), &s(&to));
+        }
         done.push((s(src), s(&to)));
     }
     Ok(done)
@@ -188,6 +191,7 @@ pub fn move_back(pairs: &[(String, String)]) -> R<()> {
             return Err(format!("Cannot undo: {from} exists again"));
         }
         move_one(Path::new(to), Path::new(from), &mut pr)?;
+        crate::tags::moved(to, from);
     }
     Ok(())
 }
@@ -213,6 +217,7 @@ pub fn rename(path: &str, name: &str) -> R<String> {
         return Err(format!("{name} already exists"));
     }
     std::fs::rename(from, &to).map_err(|e| err("Cannot rename", from, e))?;
+    crate::tags::moved(path, &s(&to));
     Ok(s(&to))
 }
 
@@ -255,7 +260,7 @@ pub fn remove_empty(path: &str) -> R<()> {
 }
 
 pub fn delete(paths: &[String]) -> R<()> {
-    paths.iter().try_for_each(|p| remove(Path::new(p)))
+    paths.iter().try_for_each(|p| remove(Path::new(p)).map(|_| crate::tags::removed(p)))
 }
 
 /// One trashed item and where it went, so undo can put it back.
@@ -279,7 +284,10 @@ pub fn trash(paths: &[String]) -> TrashReport {
     let mut r = TrashReport::default();
     for p in paths {
         match platform::trash(Path::new(p)) {
-            Ok(t) => r.items.push(t),
+            Ok(t) => {
+                crate::tags::trashed(p, &t.original);
+                r.items.push(t)
+            }
             Err(e) => r.failed.push(e),
         }
     }
@@ -310,6 +318,7 @@ pub fn purge(stored: Option<&[String]>) -> R<usize> {
     let items = picked(stored);
     for t in &items {
         remove(Path::new(&t.stored))?;
+        crate::tags::purged(&t.original);
         let _ = std::fs::remove_file(&t.info);
     }
     #[cfg(windows)]
@@ -336,6 +345,7 @@ pub fn restore(items: &[Trashed]) -> R<Vec<String>> {
                 _ => orig.to_path_buf(),
             };
             std::fs::rename(&stored, &to).map_err(|e| err("Cannot restore", orig, e))?;
+            crate::tags::restored(&t.original, &s(&to));
             let _ = std::fs::remove_file(&info);
             Ok((to != orig).then(|| format!("{name} exists again, so it came back as {}", to.file_name().unwrap_or_default().to_string_lossy())))
         });

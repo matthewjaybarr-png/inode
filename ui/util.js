@@ -122,11 +122,13 @@ export const BIN = WIN ? 'Recycle Bin' : 'Trash';
 export const TRASH = 'trash:', RECENT = 'recent:';
 const LISTS = new Map([['', 'This PC'], [TRASH, BIN], [RECENT, 'Recent']]);
 // A list's display name; undefined for a real folder.
-export const placeName = (path) => LISTS.get(path);
+// "tags:red" lists everything tagged red (tags.rs); the seven colours, in menu order.
+export const TAGS = 'tags:', TAG_COLOURS = ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'grey'];
+export const placeName = (path) => LISTS.get(path) ?? (path?.startsWith(TAGS) ? `Tagged ${path.slice(TAGS.length)}` : undefined);
 // Not a folder yet: a network address (smb://server/share), a locked drive (luks:/dev/sdb1) or the "Connect to
 // server…" row (connect:). Opening one mounts it first (net.js), and the folder it becomes is what a pane shows.
 export const isAddress = (path) => /^(connect:$|luks:\/|[a-z][a-z0-9+.-]+:\/\/)/i.test(path || '');
-export const isFolder = (path) => !!path && !LISTS.has(path) && !isAddress(path);
+export const isFolder = (path) => !!path && placeName(path) === undefined && !isAddress(path);
 
 // "pack.tar.gz" -> "pack": the folder name "Extract to folder" uses; '' when the name is not an archive we extract.
 export const archiveStem = (name) => name.match(/^(.+?)\.(zip|7z|rar|tgz|tar(\.(gz|xz|zst|bz2))?)$/i)?.[1] || '';
@@ -332,3 +334,29 @@ export function gridStep(i, n, cols, dx, dy) {
 }
 
 export const IMAGES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'avif'];
+
+// Custom actions (actions.rs reads the files): which of them fit a selection, with the menu text for each.
+// An action shows only when every selected item fits it: not a folder if it says `directories = false`, inside
+// one of its `under` folders, and of one of its kinds or extensions (none listed = anything).
+// shortcut: a file's kind is told from its extension, and only by family (image/*, video/*, audio/*, text/*)
+// plus application/pdf; an exact type such as image/jpeg needs the action's `extensions`. Ask the desktop's
+// type database if actions ever need more.
+const FAMILY = {
+  image: [...IMAGES, 'heic', 'heif', 'tif', 'tiff', 'raw', 'cr2', 'nef', 'arw', 'dng'],
+  video: ['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', 'wmv', 'mpg', 'mpeg', 'flv', '3gp', 'ogv'],
+  audio: ['mp3', 'wav', 'flac', 'ogg', 'oga', 'opus', 'm4a', 'aac', 'wma', 'aiff'],
+  text: ['txt', 'md', 'log', 'csv', 'json', 'xml', 'html', 'htm', 'css', 'js', 'ts', 'py', 'rs', 'c', 'h', 'cpp', 'sh', 'toml', 'yaml', 'yml', 'ini', 'conf', 'nc', 'tap', 'min', 'eia'],
+};
+export function actionsFor(actions, entries, win = WIN) {
+  const low = (s) => (win ? s.toLowerCase() : s), n = entries.length;
+  const fits = (a, e) => {
+    if (e.dir && a.directories === false) return false;
+    if (a.under?.length && !a.under.some((root) => { const r = low(root.replace(/[\\/]+$/, '')), p = low(e.path); return p === r || (p.startsWith(r) && /[\\/]/.test(p[r.length])); })) return false;
+    const kinds = a.mimetypes || [], exts = a.extensions || [];
+    if (!kinds.length && !exts.length) return true;
+    const x = e.dir ? '' : extOf(e.name), family = e.dir ? 'inode' : Object.keys(FAMILY).find((k) => FAMILY[k].includes(x));
+    return kinds.some((k) => k === '*/*' || k === `${family}/*` || (e.dir && k === 'inode/directory') || (k === 'application/pdf' && x === 'pdf'))
+      || (!!x && exts.some((s) => s.replace(/^\./, '').toLowerCase() === x));
+  };
+  return n ? actions.filter((a) => entries.every((e) => fits(a, e))).map((a) => ({ a, label: n > 1 && a.plural ? a.plural.replaceAll('%n', n) : a.name })) : [];
+}

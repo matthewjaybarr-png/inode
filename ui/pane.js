@@ -1,8 +1,8 @@
 // One file pane: path bar, sortable list, its own history and cursor.
-import { sortEntries, formatSize, formatDate, kindOf, crumbs, resolveTyped, expandAlias, relFolder, TRASH, RECENT, placeName, isFolder, WIN, visited } from './util.js';
+import { sortEntries, formatSize, formatDate, kindOf, crumbs, resolveTyped, expandAlias, relFolder, TRASH, RECENT, TAGS, placeName, isFolder, WIN, visited } from './util.js';
 import { extOf, formatMode, formatCount, IMAGES, COLUMNS, shownCols, viewOf, remember, gridStep, isAddress } from './util.js';
 import { icon, iconFor } from './icons.js';
-import { ACTIONS, keysFor, label } from './keys.js';
+import { ACTIONS, keysFor, label, lookup } from './keys.js';
 
 const invoke = (...a) => window.__TAURI__.core.invoke(...a);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -55,11 +55,23 @@ export class Pane {
     this.find.setAttribute('aria-label', 'Search');
     this.find.oninput = () => this.setQuery(this.find.value);
     this.find.onkeydown = (e) => {
+      const a = lookup(this.app.keymap, e);
       if (e.key === 'Escape') { e.preventDefault(); this.closeSearch(); }
       else if (e.key === 'Enter' || e.key === 'ArrowDown') { e.preventDefault(); this.list.focus(); }
+      else if (a?.id === 'searchText' || a?.id === 'searchCase') { e.preventDefault(); a.run(this.app); } // the two search switches work while typing
       e.stopPropagation();
     };
-    this.find.onblur = () => { if (!this.find.value.trim()) this.closeSearch(false); };
+    this.find.onblur = (e) => { if (!this.find.value.trim() && !this.findOpts.contains(e.relatedTarget)) this.closeSearch(false); };
+    // Beside the search box: Contents = look inside the files instead of at their names; Match case goes with it.
+    this.inText = false;
+    this.btnText = el('button', 'find-opt', 'Contents'); this.btnText.setAttribute('aria-pressed', 'false');
+    this.btnText.title = 'Search inside files instead of in their names (Ctrl+Alt+F)';
+    this.btnText.onclick = () => this.searchText();
+    this.caseBox = el('input'); this.caseBox.type = 'checkbox'; this.caseBox.onchange = () => this.setQuery(this.find.value);
+    this.caseTick = el('label', 'find-opt'); this.caseTick.append(this.caseBox, 'Match case'); this.caseTick.hidden = true;
+    this.caseTick.title = 'Contents search: capital and small letters must match';
+    this.findOpts = el('span', 'find-opts'); this.findOpts.hidden = true; this.findOpts.append(this.btnText, this.caseTick);
+    this.findOpts.onmousedown = (e) => { if (e.target !== this.caseBox) e.preventDefault(); }; // the search box keeps focus under a click here
     this.btnFind = el('button', 'nav'); this.btnFind.append(icon('search'));
     this.btnFind.title = 'Search this folder and its subfolders (Ctrl+F)'; this.btnFind.setAttribute('aria-label', 'Search');
     this.btnFind.onclick = () => (this.find.hidden ? this.openSearch() : this.closeSearch());
@@ -85,7 +97,7 @@ export class Pane {
     this.btnGrid = nav('Grid or list view (Ctrl+G)', '▦', () => this.setView({ grid: !this.grid }));
     this.btnView = el('button', 'nav', '☰'); this.btnView.title = 'View menu: tile size, sort, columns (Alt+V)';
     this.btnView.setAttribute('aria-label', 'View menu'); this.btnView.setAttribute('aria-haspopup', 'menu'); this.btnView.onclick = () => this.viewMenu();
-    bar.append(this.tag, this.btnBack, this.btnFwd, this.btnUp, this.crumbBox, this.input, this.find, this.filt, this.btnFind, this.btnFilter, this.btnGrid, this.btnView, this.btnAlias, this.btnPin);
+    bar.append(this.tag, this.btnBack, this.btnFwd, this.btnUp, this.crumbBox, this.input, this.find, this.findOpts, this.filt, this.btnFind, this.btnFilter, this.btnGrid, this.btnView, this.btnAlias, this.btnPin);
 
     const head = this.head = el('div', 'head row');
     head.oncontextmenu = (ev) => { ev.preventDefault(); this.app.focus(this.side); this.viewMenu({ left: ev.clientX, top: ev.clientY, bottom: ev.clientY }); };
@@ -133,6 +145,7 @@ export class Pane {
     this.tabs[this.tabIdx].path = this.path;
     this.selected.clear();
     this.render(keep ?? (from && listing.entries.some((e) => e.path === from) ? from : null));
+    this.app.loadTags?.(this.path); // not awaited: the tag dots follow if the tags changed
     this.renderTabs();
     if (isFolder(this.path)) this.app.state.recents = visited(this.app.state.recents, this.path); // for the ":" jump box
     this.app.saveState();
@@ -145,7 +158,7 @@ export class Pane {
   up() { if (this.parent != null) this.go(this.parent); }
 
   render(keepPath) {
-    const state = this.app.state, { hidden } = state, list = this.path === TRASH || this.path === RECENT;
+    const state = this.app.state, { hidden } = state, list = this.path === TRASH || this.path === RECENT || !!this.path?.startsWith(TAGS), tags = this.app.tags || {};
     Object.assign(this, viewOf(state, this.side, this.path)); // this.grid, this.tile, this.sort
     const cols = this.grid ? [] : shownCols(state);
     this.head.hidden = this.grid; this.list.classList.toggle('grid', this.grid);
@@ -156,7 +169,7 @@ export class Pane {
     const sort = this.path === RECENT ? { key: 'date', reverse: true } : this.sort;
     this.heads.date.firstChild.data = this.path === TRASH ? 'Deleted' : 'Modified';
     const q = this.query.toLowerCase();
-    const src = !q ? this.entries : this.found ?? this.entries.filter((e) => e.name.toLowerCase().includes(q));
+    const src = !q ? this.entries : this.found ?? (this.inText ? [] : this.entries.filter((e) => e.name.toLowerCase().includes(q)));
     if (this.counted !== hidden) { this.counted = hidden; for (const e of src) delete e.items; } // the counts follow the hidden setting
     // A file chooser (pick.js) also hides the files its file-type filter leaves out.
     const shown = (hidden ? src : src.filter((e) => !e.hidden)).filter(this.app.pick?.shows ?? Boolean), f = this.filter;
@@ -178,9 +191,12 @@ export class Pane {
       // A tile: the picture (the type icon until a thumbnail loads, see loadPic) above the name.
       if (this.grid) { const pic = el('span', 'pic'); pic.ico = ico; pic.append(ico); r.append(pic); r.title = e.name; if (!e.dir && !e.noPic) this.io.observe(pic); } else name.append(ico);
       name.append(el('span', 'nm', e.name));
+      if (tags[e.path]) { const d = el('span', 'tag-dot'); d.style.background = `var(--tag-${tags[e.path]})`; d.title = `Tagged ${tags[e.path]}`; d.setAttribute('role', 'img'); d.setAttribute('aria-label', d.title); name.append(d); }
       // Trash and Recent show the folder each item came from / lives in.
       const where = list ? (e.origin || e.path).replace(/[\\/][^\\/]*$/, '') || '/' : q && relFolder(this.path, e.path);
       if (where) { const w = el('span', 'where', where); w.title = e.path; name.append(w); }
+      // A contents-search hit: how many matches and the first matching line.
+      if (e.note && q) { const w = el('span', 'where hit', e.note); w.title = e.note; name.append(w); if (this.grid) r.title = `${e.name}\n${e.note}`; }
       r.append(name, ...cols.map((k) => el('span', `c-${k}`, CELL[k](e))));
       // A plain press on a row of a multi-selection keeps it (a drag may start here, see dnd.js); the click after narrows it.
       const plain = (ev) => this.selected.size > 1 && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey;
@@ -197,7 +213,7 @@ export class Pane {
     });
     this.list.replaceChildren(frag);
     this.empty.hidden = this.rows.length > 0;
-    this.empty.textContent = q ? (this.searching ? 'Searching subfolders…' : `Nothing named like "${this.query}" here or in subfolders`) : this.entries.length ? 'Only hidden items here (Ctrl+H shows them)' : placeName(this.path) ? `${placeName(this.path)} is empty` : 'This folder is empty';
+    this.empty.textContent = q ? (this.inText ? (this.searching ? 'Searching inside the files here and in subfolders…' : `No file here or in subfolders contains "${this.query}"`) : this.searching ? 'Searching subfolders…' : `Nothing named like "${this.query}" here or in subfolders`) : this.entries.length ? 'Only hidden items here (Ctrl+H shows them)' : placeName(this.path) ? `${placeName(this.path)} is empty` : 'This folder is empty';
     if (f && this.total) this.empty.textContent = `No name here holds "${this.filt.value}" (Esc clears the filter)`;
     const k = keepPath ? this.rows.findIndex((e) => e.path === keepPath) : -1;
     this.cursor = Math.max(0, Math.min(k >= 0 ? k : this.cursor, this.rows.length - 1));
@@ -424,15 +440,31 @@ export class Pane {
   openSearch() {
     if (!isFolder(this.path)) return this.app.flash('Open a folder to search in it');
     this.closePath();
-    this.find.placeholder = `Search ${tabName(this.path)} and subfolders`;
-    this.crumbBox.hidden = true; this.find.hidden = false; this.find.focus(); this.find.select();
+    this.crumbBox.hidden = true; this.find.hidden = this.findOpts.hidden = false; this.setInText(this.inText); this.find.focus(); this.find.select();
+  }
+  // The Contents switch: names (off) or the text inside files (on). A typed query is searched again the new way.
+  setInText(on) {
+    const was = this.inText;
+    this.inText = on; this.btnText.setAttribute('aria-pressed', String(on)); this.caseTick.hidden = !on;
+    this.find.placeholder = on ? `Search inside the files of ${tabName(this.path)} and subfolders` : `Search ${tabName(this.path)} and subfolders`;
+    if (this.query && was !== on) this.setQuery(this.find.value);
+  }
+  // Ctrl+Alt+F and the Contents button: opens the search looking inside files; with the box open it flips the switch.
+  searchText() {
+    const on = this.find.hidden || !this.inText;
+    if (this.find.hidden) { this.openSearch(); if (this.find.hidden) return; }
+    this.setInText(on); this.find.focus();
+  }
+  toggleCase() {
+    if (this.find.hidden || !this.inText) return this.app.flash('Match case belongs to the contents search: Ctrl+Alt+F, or the Contents button in the search box');
+    this.caseBox.checked = !this.caseBox.checked; this.setQuery(this.find.value);
   }
   // Drops the search without drawing; go() calls it so a new folder never opens filtered.
   resetSearch() {
     clearTimeout(this.findTimer);
-    if (this.query) invoke('search', { root: '', query: '', hidden: false }).catch(() => {}); // stops a running walk
-    this.query = ''; this.found = null; this.searching = false; this.find.value = '';
-    this.find.hidden = true; this.crumbBox.hidden = !this.input.hidden;
+    if (this.query) invoke('search', { root: '', query: '', hidden: false }).catch(() => {}); // stops a running walk (and ripgrep)
+    this.query = ''; this.found = null; this.searching = false; this.find.value = ''; this.inText = false;
+    this.find.hidden = this.findOpts.hidden = true; this.crumbBox.hidden = !this.input.hidden;
   }
   closeSearch(focus = true) {
     const had = this.query;
@@ -447,13 +479,14 @@ export class Pane {
     if (this.query) this.findTimer = setTimeout(() => this.runSearch(), 250);
   }
   async runSearch() {
-    const { query, path } = this;
+    const { query, path, inText } = this, matchCase = this.caseBox.checked, hidden = this.app.state.hidden;
     this.searching = true;
     try {
-      const r = await invoke('search', { root: path, query, hidden: this.app.state.hidden });
-      if (query !== this.query || path !== this.path) return; // typed on, or left the folder
+      const r = await invoke(inText ? 'search_text' : 'search', inText ? { root: path, query, hidden, matchCase } : { root: path, query, hidden });
+      if (query !== this.query || path !== this.path || inText !== this.inText || matchCase !== this.caseBox.checked) return; // typed on, switched, or left the folder
+      if (inText) r.entries.forEach((e, i) => { const [line, n] = r.notes[i]; e.note = `${n} match${n === 1 ? '' : 'es'} · ${line}`; });
       this.found = r.entries;
-      if (r.truncated) this.app.flash(`Showing the first ${r.entries.length} matches; type more to narrow it`);
+      if (r.truncated) this.app.flash(inText ? `Showing the first ${r.entries.length} files that contain it (that is the limit); type more to narrow it` : `Showing the first ${r.entries.length} matches; type more to narrow it`);
     } catch (err) {
       if (String(err) !== 'superseded') this.app.flash(String(err));
       if (query !== this.query) return;

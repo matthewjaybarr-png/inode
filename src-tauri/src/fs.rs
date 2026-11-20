@@ -28,6 +28,8 @@ pub struct Entry {
 /// The virtual folders: lists that live at no real path (the UI treats them like "This PC").
 pub const TRASH: &str = "trash:";
 pub const RECENT: &str = "recent:";
+/// "tags:red": everything tagged that colour (tags.rs).
+pub const TAGS: &str = "tags:";
 
 #[derive(Serialize, Debug)]
 pub struct Listing {
@@ -142,22 +144,30 @@ pub fn drives() -> Vec<String> {
 }
 
 /// One folder entry, plus whether it is a real folder to descend into (links are not, so a search cannot loop).
-fn entry(de: &std::fs::DirEntry) -> Option<(Entry, bool)> {
-    let name = de.file_name().to_string_lossy().into_owned();
-    let lmd = de.metadata().ok()?;
+pub(crate) fn entry(de: &std::fs::DirEntry) -> Option<(Entry, bool)> {
+    Some(entry_from(de.file_name().to_string_lossy().into_owned(), de.path(), de.metadata().ok()?))
+}
+
+/// The same for a path that did not come from reading its folder (tagged items, content-search hits).
+pub(crate) fn entry_of(p: &Path) -> Option<Entry> {
+    Some(entry_from(p.file_name()?.to_string_lossy().into_owned(), p.to_path_buf(), p.symlink_metadata().ok()?).0)
+}
+
+/// `lmd` = the item's own metadata (a link's, not its target's).
+fn entry_from(name: String, path: PathBuf, lmd: std::fs::Metadata) -> (Entry, bool) {
     let link = lmd.file_type().is_symlink();
     let real_dir = lmd.is_dir() && !link;
     // The link's own attributes decide hidden: Windows junctions (Application Data, NetHood) are hidden, their targets are not.
     let hidden = is_hidden(&name, &lmd);
     // Follow links so a link to a folder opens like a folder; a broken link stays a plain entry.
-    let md = if link { std::fs::metadata(de.path()).unwrap_or(lmd) } else { lmd };
+    let md = if link { std::fs::metadata(&path).unwrap_or(lmd) } else { lmd };
     let mtime = md.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as f64).unwrap_or(0.0);
     let ctime = md.created().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as f64).unwrap_or(0.0);
     #[cfg(unix)]
     let mode = Some(std::os::unix::fs::PermissionsExt::mode(&md.permissions()) & 0o7777);
     #[cfg(not(unix))]
     let mode = None;
-    Some((Entry { hidden, path: s(&de.path()), name, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime, link, origin: None, ctime, mode }, real_dir))
+    (Entry { hidden, path: s(&path), name, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime, link, origin: None, ctime, mode }, real_dir)
 }
 
 /// How many items each folder holds, for the Size column (None: it cannot be read). Hidden items count only
@@ -179,13 +189,15 @@ pub struct Found {
     pub truncated: bool,
 }
 
-static SEARCH_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Shared with the content search (find.rs): any new search, of either kind, supersedes the one running.
+pub(crate) static SEARCH_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Names under `root` containing `query` (any case), nearest folders first. A newer search stops this one.
 /// Hidden folders are only entered when `hidden` is on, so .git and AppData do not drown the results.
 pub fn search(root: &str, query: &str, hidden: bool, limit: usize) -> R<Found> {
     use std::sync::atomic::Ordering::SeqCst;
     let gen = SEARCH_GEN.fetch_add(1, SeqCst) + 1;
+    crate::find::stop();
     let q = query.to_lowercase();
     let mut found = Found { entries: Vec::new(), truncated: false };
     if q.is_empty() {
@@ -216,9 +228,13 @@ pub fn search(root: &str, query: &str, hidden: bool, limit: usize) -> R<Found> {
 }
 
 #[cfg(test)]
-mod search_tests {
+pub(crate) mod search_tests {
+    /// One search runs at a time (a new one supersedes the old), so the tests that search take turns.
+    pub static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn finds_nested_skips_hidden_dirs_and_caps() {
+        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
         let root = std::env::temp_dir().join(format!("inode-search-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("a/b")).unwrap();
@@ -247,6 +263,11 @@ pub fn list(path: &str) -> R<Listing> {
     }
     if path == TRASH || path == RECENT {
         let entries = if path == TRASH { trash_entries() } else { recent_entries(recent()) };
+        return Ok(Listing { path: path.into(), parent: None, entries });
+    }
+    if let Some(colour) = path.strip_prefix(TAGS) {
+        // What cannot be reached right now (a drive that is away) is left out of the list, and keeps its tag.
+        let entries = crate::tags::paths(colour).iter().filter_map(|p| entry_of(Path::new(p))).collect();
         return Ok(Listing { path: path.into(), parent: None, entries });
     }
     let dir = PathBuf::from(path);
@@ -519,6 +540,11 @@ pub(crate) fn clean(mut c: std::process::Command) -> std::process::Command {
 
 /// A terminal in `dir`: Windows Terminal, else PowerShell; on Linux xdg-terminal-exec, else $TERMINAL.
 pub fn open_terminal(dir: &str) -> R<()> {
+    terminal(dir, None)
+}
+
+/// The same terminal, running `run` instead of a shell (Linux; a custom action's `sh -c script sh dir args…`).
+pub fn terminal(dir: &str, run: Option<Vec<String>>) -> R<()> {
     if !Path::new(dir).is_dir() {
         return Err(format!("Not a folder: {dir}"));
     }
@@ -530,10 +556,12 @@ pub fn open_terminal(dir: &str) -> R<()> {
         ]
     } else {
         // The shell cds itself: single-instance terminals (Ghostty) ignore both the cwd and --dir.
-        let cd = ["sh", "-c", r#"cd "$1" && exec "${SHELL:-sh}""#, "sh", dir].map(String::from).to_vec();
-        let mut t = vec![("xdg-terminal-exec".to_string(), cd)];
+        let e = if run.is_some() { vec!["-e".to_string()] } else { vec![] };
+        let cd = run.unwrap_or_else(|| ["sh", "-c", r#"cd "$1" && exec "${SHELL:-sh}""#, "sh", dir].map(String::from).to_vec());
+        let mut t = vec![("xdg-terminal-exec".to_string(), cd.clone())];
         if let Ok(term) = std::env::var("TERMINAL") {
-            t.push((term, vec![]));
+            // A bare $TERMINAL opens in `dir` by itself; a command goes after -e, which most terminals take.
+            t.push((term, if e.is_empty() { e } else { [e, cd].concat() }));
         }
         t
     };

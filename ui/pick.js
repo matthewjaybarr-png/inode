@@ -56,6 +56,10 @@ export function setupPick(app, req) {
   // caller's folder or else the one visited last.
   Object.assign(app.state, { dual: false, preview: false, tabs: [], paths: [app.state.recents?.[0] ?? app.home] });
   document.body.classList.add('picking');
+  // A chooser picks; it does not delete or run the user's own commands (menu, palette, keys and drops all end here).
+  const off = () => app.flash('Deleting is off in a file chooser: use an Inode window');
+  Object.assign(app.ops, { trash: off, purge: off, deleteForever: off });
+  app.actionItems = () => [];
 
   const bar = el('div'); bar.id = 'pick-bar'; bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', req.title);
   const types = el('select'), ok = el('button', 'primary', req.accept), cancel = el('button', '', 'Cancel');
