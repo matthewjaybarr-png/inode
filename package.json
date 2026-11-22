@@ -6,7 +6,7 @@
   "description": "Inode file manager",
   "scripts": {
     "tauri": "tauri",
-    "test": "node --test test/",
+    "test": "node --test test/*.test.js",
     "dev": "tauri dev",
     "build": "tauri build"
   },
