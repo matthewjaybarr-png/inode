@@ -293,17 +293,7 @@ pub fn lock_existing(folder: &str, password: &str) -> R<(String, String)> {
     let (parent, name) = (s(f.parent().unwrap()), f.file_name().unwrap().to_string_lossy().into_owned());
     let (tmp, key) = make_locked(&parent, &format!(".{name}.locking"), password)?;
     let view = unlock_folder(&tmp, password);
-    let copied = view.as_ref().map_err(String::clone).and_then(|v| {
-        let (ok, _, err) = run("cp", &["-a", "--reflink=auto", "--", &format!("{folder}/."), &format!("{v}/")], "")?;
-        if !ok {
-            return Err(format!("Could not copy the files in: {}", plain(&err)));
-        }
-        let (same, out, err) = run("diff", &["-rq", "--no-dereference", "--", folder, v], "")?;
-        if !same {
-            return Err(format!("The locked copy did not match the original: {}", plain(if out.is_empty() { &err } else { &out })));
-        }
-        Ok(())
-    });
+    let copied = view.as_ref().map_err(String::clone).and_then(|v| copy_checked(folder, v));
     let closed = view.as_ref().map_or(Some(Ok(())), |v| eject(v));
     if let Err(e) = copied.and(closed.unwrap_or(Ok(()))) {
         if let (Ok(v), Some(_)) = (&view, open_view(Path::new(&tmp))) {
@@ -321,6 +311,51 @@ pub fn lock_existing(folder: &str, password: &str) -> R<(String, String)> {
     }
     std::fs::rename(&tmp, folder).map_err(|e| format!("{name} is in the Trash and the locked copy is {tmp}, but it could not be renamed: {e}"))?;
     Ok((folder.to_string(), key))
+}
+
+/// Copies everything in `from` into the folder `to`, then compares the two; Err if anything differs.
+fn copy_checked(from: &str, to: &str) -> R<()> {
+    let (ok, _, err) = run("cp", &["-a", "--reflink=auto", "--", &format!("{from}/."), &format!("{to}/")], "")?;
+    if !ok {
+        return Err(format!("Could not copy the files: {}", plain(&err)));
+    }
+    let (same, out, err) = run("diff", &["-rq", "--no-dereference", "--", from, to], "")?;
+    if !same {
+        return Err(format!("The copy did not match the original: {}", plain(if out.is_empty() { &err } else { &out })));
+    }
+    Ok(())
+}
+
+/// The reverse of lock_existing: a locked folder's files are copied out into a plain folder beside it and compared,
+/// and only then is the locked folder moved to the Trash and the plain one given its name. Any failure before that
+/// leaves the locked folder untouched. Returns the folder's path.
+pub fn unlock_existing(cipher: &str, password: &str) -> R<String> {
+    let c = Path::new(cipher);
+    if !is_locked_folder(c) {
+        return Err(format!("{cipher} is not a locked folder"));
+    }
+    let name = c.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or("Not a folder")?;
+    // An open folder needs no password to read, so check the one typed: gocryptfs-xray fails on a wrong one.
+    let (ok, _, err) = run("gocryptfs-xray", &["-dumpmasterkey", &format!("{cipher}/gocryptfs.conf")], password)?;
+    if !ok {
+        return Err(if err.contains("assword") { "Wrong password".into() } else { plain(&err) });
+    }
+    let tmp = s(&c.with_file_name(format!(".{name}.unlocking")));
+    std::fs::create_dir(&tmp).map_err(|e| format!("Could not make {tmp}: {e}"))?;
+    let view = unlock_folder(cipher, password);
+    let copied = view.as_ref().map_err(String::clone).and_then(|v| copy_checked(v, &tmp));
+    // Closed even if it was open before: the locked folder is about to go to the Trash.
+    let closed = view.as_ref().map_or(Ok(()), |v| eject(v).unwrap_or(Ok(())));
+    if let Err(e) = copied.and(closed.map_err(|e| format!("It could not be closed (is something using it?): {e}"))) {
+        let _ = std::fs::remove_dir_all(&tmp); // our own plain copy, never the locked folder
+        return Err(format!("{e} · {name} was not changed"));
+    }
+    let t = crate::ops::trash(&[cipher.to_string()]);
+    if let Some(e) = t.failed.first() {
+        return Err(format!("The unlocked copy is ready as {tmp}, but the locked {name} could not be moved to the Trash: {e}"));
+    }
+    std::fs::rename(&tmp, cipher).map_err(|e| format!("The locked {name} is in the Trash and the unlocked copy is {tmp}, but it could not be renamed: {e}"))?;
+    Ok(cipher.to_string())
 }
 
 /// Opens a locked folder; returns the folder where its files can be read. Already open = no password needed.
@@ -473,8 +508,16 @@ mod tests {
         assert!(d.join("data/Trash/files/Secret/sub/a.txt").is_file());
         let v = unlock_folder(&path, "pw").unwrap();
         assert_eq!(std::fs::read_to_string(Path::new(&v).join("sub/a.txt")).unwrap(), "hello");
-        eject(&v).unwrap().unwrap();
         assert!(lock_existing(&path, "pw").unwrap_err().contains("already"));
+        // Back to a plain folder, while it is open: a wrong password changes nothing, the right one closes it.
+        assert!(unlock_existing(&path, "nope").unwrap_err().contains("Wrong password"));
+        assert!(is_locked_folder(&f));
+        unlock_existing(&path, "pw").unwrap();
+        assert!(!Path::new(&v).exists());
+        assert!(!is_locked_folder(&f));
+        assert_eq!(std::fs::read_to_string(f.join("sub/a.txt")).unwrap(), "hello");
+        assert!(!d.join(".Secret.unlocking").exists());
+        assert!(std::fs::read_dir(d.join("data/Trash/files")).unwrap().any(|e| e.unwrap().path().join("gocryptfs.conf").is_file()));
         let _ = std::fs::remove_dir_all(&d);
     }
 

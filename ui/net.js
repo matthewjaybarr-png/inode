@@ -160,5 +160,19 @@ export function setupNet(app) {
         return;
       }
     },
+
+    // The reverse (mounts.rs unlock_existing): its files are copied out and checked, the locked copy goes to the Trash.
+    async unlockExisting(path, pane = app.pane()) {
+      const name = path.split('/').pop();
+      const got = await fields(`Remove the password from ${name}: its files are stored readable again and the locked copy goes to the Trash.`, [{ label: 'Password', secret: true }]);
+      if (!got) return;
+      try {
+        app.flash(`Removing the password from ${name}: copying its files out…`);
+        await invoke('unlock_existing', { folder: path, password: got[0] });
+      } catch (e) { app.flash(String(e)); return; }
+      refresh(); // it was open: its sidebar entry is gone
+      await pane.go(pane.path, { push: false, keep: path });
+      app.flash(`${name} no longer has a password · the locked copy is in the Trash`);
+    },
   };
 }

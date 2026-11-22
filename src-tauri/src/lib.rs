@@ -396,7 +396,7 @@ pub fn run() {
             launch(app.handle(), &std::env::args().collect::<Vec<_>>(), &cwd.to_string_lossy());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![new_window, theme_choice, set_theme_choice, list_dir, places, open_path, open_terminal, startup_path, desktop::desktop_theme, conflicts, transfer, move_back, rename_path, new_item, extract, undo_extract, trash_restore, trash_purge, trash, has_bin, remove_empty, restore, delete_paths, read_text, probe, search, eject, props, save_settings, apps_for, open_with, compress, clip_write, clip_read, same_device, shell::make_link, shell::link_dir, shell::thumb, shell::drag_out, dir_counts, search_text, tags, set_tags, actions, actions_dir, run_action, desk::pick_request, desk::pick_done, desk::connect, desk::unlock, desk::make_locked, desk::lock_existing, desk::unlock_folder])
+        .invoke_handler(tauri::generate_handler![new_window, theme_choice, set_theme_choice, list_dir, places, open_path, open_terminal, startup_path, desktop::desktop_theme, conflicts, transfer, move_back, rename_path, new_item, extract, undo_extract, trash_restore, trash_purge, trash, has_bin, remove_empty, restore, delete_paths, read_text, probe, search, eject, props, save_settings, apps_for, open_with, compress, clip_write, clip_read, same_device, shell::make_link, shell::link_dir, shell::thumb, shell::drag_out, dir_counts, search_text, tags, set_tags, actions, actions_dir, run_action, desk::pick_request, desk::pick_done, desk::connect, desk::unlock, desk::make_locked, desk::lock_existing, desk::unlock_existing, desk::unlock_folder])
         .run(tauri::generate_context!())
         .expect("error while running Inode");
 }

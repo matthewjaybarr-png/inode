@@ -23,6 +23,9 @@ pub struct Entry {
     /// Unix permission bits; None on Windows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<u32>,
+    /// A locked (gocryptfs) folder: the menu offers to remove its password instead of adding one.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
 }
 
 /// The virtual folders: lists that live at no real path (the UI treats them like "This PC").
@@ -153,6 +156,15 @@ pub(crate) fn entry_of(p: &Path) -> Option<Entry> {
     Some(entry_from(p.file_name()?.to_string_lossy().into_owned(), p.to_path_buf(), p.symlink_metadata().ok()?).0)
 }
 
+#[cfg(target_os = "linux")]
+fn locked_folder(p: &Path) -> bool {
+    crate::mounts::is_locked_folder(p)
+}
+#[cfg(not(target_os = "linux"))]
+fn locked_folder(_: &Path) -> bool {
+    false
+}
+
 /// `lmd` = the item's own metadata (a link's, not its target's).
 fn entry_from(name: String, path: PathBuf, lmd: std::fs::Metadata) -> (Entry, bool) {
     let link = lmd.file_type().is_symlink();
@@ -167,7 +179,7 @@ fn entry_from(name: String, path: PathBuf, lmd: std::fs::Metadata) -> (Entry, bo
     let mode = Some(std::os::unix::fs::PermissionsExt::mode(&md.permissions()) & 0o7777);
     #[cfg(not(unix))]
     let mode = None;
-    (Entry { hidden, path: s(&path), name, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime, link, origin: None, ctime, mode }, real_dir)
+    (Entry { hidden, path: s(&path), name, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime, link, origin: None, ctime, mode, locked: real_dir && locked_folder(&path) }, real_dir)
 }
 
 /// How many items each folder holds, for the Size column (None: it cannot be read). Hidden items count only
@@ -257,7 +269,7 @@ pub fn list(path: &str) -> R<Listing> {
     if path.is_empty() && cfg!(windows) {
         let entries = drives()
             .into_iter()
-            .map(|d| Entry { name: d.clone(), path: d, dir: true, size: 0, mtime: 0.0, hidden: false, link: false, origin: None, ctime: 0.0, mode: None })
+            .map(|d| Entry { name: d.clone(), path: d, dir: true, size: 0, mtime: 0.0, hidden: false, link: false, origin: None, ctime: 0.0, mode: None, locked: false })
             .collect();
         return Ok(Listing { path: String::new(), parent: None, entries });
     }
@@ -334,7 +346,7 @@ fn trash_entries() -> Vec<Entry> {
     let made = |(t, when): (crate::ops::Trashed, f64)| {
         let md = Path::new(&t.stored).symlink_metadata().ok()?;
         let name = Path::new(&t.original).file_name()?.to_string_lossy().into_owned();
-        Some(Entry { name, path: t.stored, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime: when, hidden: false, link: md.file_type().is_symlink(), origin: Some(t.original), ctime: 0.0, mode: None })
+        Some(Entry { name, path: t.stored, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime: when, hidden: false, link: md.file_type().is_symlink(), origin: Some(t.original), ctime: 0.0, mode: None, locked: false })
     };
     crate::ops::trash_items().into_iter().filter_map(made).collect()
 }
@@ -389,7 +401,7 @@ fn recent_entries(used: Vec<(String, f64)>) -> Vec<Entry> {
         .filter_map(|(path, mtime)| {
             let md = std::fs::metadata(&path).ok()?;
             let name = Path::new(&path).file_name()?.to_string_lossy().into_owned();
-            Some(Entry { name, path, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime, hidden: false, link: false, origin: None, ctime: 0.0, mode: None })
+            Some(Entry { name, path, dir: md.is_dir(), size: if md.is_dir() { 0 } else { md.len() }, mtime, hidden: false, link: false, origin: None, ctime: 0.0, mode: None, locked: false })
         })
         .collect();
     v.sort_by(|a, b| b.mtime.total_cmp(&a.mtime));
