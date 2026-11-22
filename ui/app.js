@@ -126,15 +126,16 @@ const app = {
   },
   // New folder / New file / Delete state for the active pane. A disabled button can't show a tooltip, so the reason is spelled out beside it.
   actionBar(p = this.pane()) {
-    const ok = isFolder(p.path), bin = p.path === TRASH, n = ok || bin ? p.targets().length : 0, nf = $('#btn-new'), file = $('#btn-newfile'), del = $('#btn-trash');
+    const ok = isFolder(p.path), bin = p.path === TRASH, n = ok || bin ? p.targets().length : 0, nf = $('#btn-new'), file = $('#btn-newfile'), locked = $('#btn-newlocked'), del = $('#btn-trash');
     const off = `${placeName(p.path) ?? 'This'} is a list, not a folder; open a drive or folder to make something in it`;
-    nf.disabled = file.disabled = !ok; del.disabled = !n;
+    nf.disabled = file.disabled = locked.disabled = !ok; del.disabled = !n;
     del.textContent = `Delete${bin ? ' permanently' : ''}${n > 1 ? ` (${n})` : ''}`;
     del.title = !n ? 'Nothing to delete: select a file or folder first'
       : bin ? `Delete ${n === 1 ? 'the item under the cursor' : `${n} selected items`} from the ${BIN} permanently (Delete). It asks first.`
         : `Move ${n === 1 ? 'the item under the cursor' : `${n} selected items`} to the ${BIN} (Delete). Shift+Delete deletes permanently.`;
     nf.title = ok ? `New folder in ${p.path} (Ctrl+Shift+N)` : off;
     file.title = ok ? `New file in ${p.path} (Ctrl+Alt+N)` : off;
+    locked.title = ok ? `New locked folder in ${p.path}: its files are kept encrypted and open only with a password. To lock a folder you already have, right-click it.` : off;
     $('#act-where').textContent = ok ? `${this.state.dual ? `${this.active ? 'Right' : 'Left'} pane: ` : ''}${p.path}${n ? ` · ${n} ${document.body.classList.contains('picking') ? 'selected' : 'to delete'}` : ' · nothing selected'}`
       : bin ? `${BIN}: right-click an item to restore it; right-click empty space to restore everything or empty it`
         : p.path.startsWith(TAGS) ? 'Tagged items, wherever they are: right-click one to open its folder or change its tag. Nothing can be made here.'

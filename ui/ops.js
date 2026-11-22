@@ -370,6 +370,9 @@ export function setupOps(app) {
   $('#btn-new').onclick = () => ops.newItem(true);
   $('#btn-newfile').onclick = () => ops.newItem(false);
   $('#btn-newfile').onmousedown = (e) => e.preventDefault();
+  $('#btn-newlocked').onclick = () => app.net.newLocked();
+  $('#btn-newlocked').onmousedown = (e) => e.preventDefault();
+  $('#btn-newlocked').hidden = !navigator.platform.startsWith('Linux'); // gocryptfs: Linux only
   $('#btn-redo').onclick = () => ops.redo();
   $('#btn-rename').onclick = () => ops.rename();
   $('#btn-new').onmousedown = (e) => e.preventDefault(); // keep focus off the button so the name box keeps it
