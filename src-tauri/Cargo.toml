@@ -1,6 +1,6 @@
 [package]
 name = "inode"
-version = "0.7.0"
+version = "0.7.1"
 description = "Inode file manager"
 license = "GPL-3.0-or-later"
 authors = ["Matt Barr"]
