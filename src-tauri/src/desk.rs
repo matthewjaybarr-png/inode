@@ -49,6 +49,30 @@ pub async fn connect(address: String, user: Option<String>, password: Option<Str
     }
 }
 
+/// Makes a new locked folder in `dir`; returns [its path, the recovery key]. The password goes nowhere but gocryptfs.
+#[tauri::command]
+pub async fn make_locked(dir: String, name: String, password: String) -> R<(String, String)> {
+    #[cfg(target_os = "linux")]
+    return tauri::async_runtime::spawn_blocking(move || crate::mounts::make_locked(&dir, &name, &password)).await.map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (dir, name, password);
+        Err(NO.into())
+    }
+}
+
+/// Opens a locked folder; returns the folder its readable files are in.
+#[tauri::command]
+pub async fn unlock_folder(folder: String, password: String) -> R<String> {
+    #[cfg(target_os = "linux")]
+    return tauri::async_runtime::spawn_blocking(move || crate::mounts::unlock_folder(&folder, &password)).await.map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (folder, password);
+        Err(NO.into())
+    }
+}
+
 /// Unlocks and mounts a locked encrypted drive; returns its folder.
 #[tauri::command]
 pub async fn unlock(device: String, passphrase: String) -> R<String> {

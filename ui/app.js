@@ -151,11 +151,11 @@ const app = {
     btn.disabled = true; this.flash(`Ejecting ${pl.name}…`);
     const home = this.places.find((p) => p.kind === 'home')?.path || '';
     const root = /[\\/]$/.test(pl.path) ? pl.path : `${pl.path}/`, under = (path) => path && (path === pl.path || path.toLowerCase().startsWith(root.toLowerCase()));
-    // A pane showing the drive would keep it busy; send it home first.
-    await Promise.all(this.panes.filter((p) => under(p.path)).map((p) => p.go(home)));
+    // A pane showing the drive would keep it busy; send it back to where it was before (a locked folder's own folder), else home.
+    await Promise.all(this.panes.filter((p) => under(p.path)).map((p) => p.go(p.back.findLast((b) => !under(b)) || home)));
     try {
       await invoke('eject', { path: pl.path });
-      this.flash(`${pl.name} can be removed now`);
+      this.flash(pl.kind === 'vault' ? `${pl.name} is locked again` : `${pl.name} can be removed now`);
       this.renderPlaces(await invoke('places'));
     } catch (e) {
       btn.disabled = false; this.flash(`Could not eject ${pl.name}: ${e}`);
@@ -280,7 +280,7 @@ const app = {
          it('Copy to other pane', 'copyOther', two), it('Move to other pane', 'moveOther', two), null,
          it('Rename', 'rename'), it('Create shortcut', 'shortcut'), it('Compress to .zip', 'compress'), !!stem && it('Extract here', 'extractHere'), !!stem && it(`Extract to folder ${stem}`, 'extractTo'), it(pinned(entry.path) ? 'Unpin from sidebar' : 'Pin to sidebar', 'pinItem'), it(TRASH_LABEL, 'trash'), null,
          it(this.state.preview ? 'Hide preview' : 'Show preview', 'preview'), props()]
-      : [it('New folder', 'newFolder'), it('New file', 'newFile'), it('Paste', 'paste'), null,
+      : [it('New folder', 'newFolder'), it('New file', 'newFile'), navigator.platform.startsWith('Linux') && it('New locked folder…', 'newLocked'), it('Paste', 'paste'), null,
          it('Open in terminal', 'terminal'), own('Copy folder path', () => this.copyPath([here])), it(pinned(here) ? 'Unpin this folder' : 'Pin this folder', 'pin'), it('Alias this folder…', 'alias'), null,
          it('Show / hide hidden items', 'hidden'), it(this.state.preview ? 'Hide preview' : 'Show preview', 'preview'), it('Refresh', 'refresh'), null,
          own('Folder properties', () => this.showProps({ name: here.split(/[\\/]/).filter(Boolean).pop() || here, path: here, dir: true }))];

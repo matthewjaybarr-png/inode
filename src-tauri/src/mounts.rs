@@ -51,7 +51,7 @@ fn mounts() -> Vec<Mount> {
 /// desktop's own plumbing: gvfs' root, the document portal, and the images AppImages run from.
 fn is_network(m: &Mount) -> bool {
     matches!(m.fstype.as_str(), "cifs" | "smb3" | "nfs" | "nfs4" | "davfs" | "ceph" | "afs" | "ncpfs")
-        || (m.fstype.starts_with("fuse.") && !matches!(m.fstype.as_str(), "fuse.gvfsd-fuse" | "fuse.portal" | "fuse.lxcfs") && !m.dir.starts_with("/tmp/.mount_"))
+        || (m.fstype.starts_with("fuse.") && !matches!(m.fstype.as_str(), "fuse.gvfsd-fuse" | "fuse.portal" | "fuse.lxcfs" | "fuse.gocryptfs") && !m.dir.starts_with("/tmp/.mount_"))
 }
 
 /// Where gvfs shows its mounts as folders.
@@ -141,6 +141,10 @@ pub fn places() -> Vec<Place> {
     for (dev, name) in locked() {
         v.push(place(name, format!("Encrypted drive {dev}, locked. Click to type its passphrase."), format!("{LUKS}{dev}"), "locked", false));
     }
+    for m in mounts().into_iter().filter(|m| m.fstype == "fuse.gocryptfs") {
+        let name = Path::new(&m.dev).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| m.dir.clone());
+        v.push(place(name, format!("Locked folder {}, open now. Eject locks it again.", m.dev), m.dir, "vault", true));
+    }
     v
 }
 
@@ -176,7 +180,12 @@ pub fn eject(path: &str) -> Option<R<()>> {
         return Some(done(run("gio", &["mount", "-u", path], "")));
     }
     let m = mounts().into_iter().find(|m| m.dir == path)?;
-    m.fstype.starts_with("fuse.").then(|| done(run("fusermount3", &["-u", path], "")))
+    let r = m.fstype.starts_with("fuse.").then(|| done(run("fusermount3", &["-u", path], "")))?;
+    // A locked folder's readable view: its empty mount point goes too.
+    if r.is_ok() && views_root().is_ok_and(|v| Path::new(path).starts_with(v)) {
+        let _ = std::fs::remove_dir(path);
+    }
+    Some(r)
 }
 
 /// The partition under an unlocked LUKS volume ("/dev/dm-3" -> "/dev/sdb1"), so eject can lock it again. `sys` = /sys/class/block.
@@ -212,6 +221,84 @@ pub fn unlock(device: &str, passphrase: &str) -> R<String> {
     let real = std::fs::canonicalize(&mapped).ok();
     let at = mounts().into_iter().find(|m| m.dev == mapped || (real.is_some() && std::fs::canonicalize(&m.dev).ok() == real));
     at.map(|m| m.dir).ok_or_else(|| "Unlocked and mounted, but the folder was not found".into())
+}
+
+// Locked folders: a gocryptfs folder on disk holds only scrambled files (names too). Unlocking mounts the readable
+// view under $XDG_RUNTIME_DIR/inode-locked/<name>; eject (fusermount3) locks it again. The password reaches
+// gocryptfs on its stdin, which it reads instead of a terminal. No list of them is kept: /proc/mounts is the state.
+
+/// Whether `dir` is a gocryptfs folder (the scrambled side).
+pub fn is_locked_folder(dir: &Path) -> bool {
+    dir.join("gocryptfs.conf").is_file() && dir.join("gocryptfs.diriv").is_file()
+}
+
+/// Where a locked folder is open right now (its mount shows the scrambled folder as the device).
+pub fn open_view(cipher: &Path) -> Option<String> {
+    let c = std::fs::canonicalize(cipher).ok()?;
+    mounts().into_iter().find(|m| m.fstype == "fuse.gocryptfs" && Path::new(&m.dev) == c).map(|m| m.dir)
+}
+
+fn views_root() -> R<PathBuf> {
+    Ok(PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").ok_or("XDG_RUNTIME_DIR is not set")?).join("inode-locked"))
+}
+
+/// The recovery key in `gocryptfs -init`'s output: the line of eight dash-separated groups of eight hex digits.
+/// The master key from `gocryptfs-xray -dumpmasterkey` (64 hex digits on a line), shown in 8 groups like gocryptfs does.
+/// `gocryptfs -init` itself prints no key when its stdin is not a terminal.
+fn recovery_key(out: &str) -> Option<String> {
+    let hex = out.lines().map(str::trim).find(|l| l.len() == 64 && l.chars().all(|c| c.is_ascii_hexdigit()))?;
+    Some(hex.as_bytes().chunks(8).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join("-"))
+}
+
+/// Makes a new, empty locked folder `name` in `dir`; returns (its path, the recovery key to show once).
+pub fn make_locked(dir: &str, name: &str, password: &str) -> R<(String, String)> {
+    if password.is_empty() {
+        return Err("The password cannot be empty".into());
+    }
+    let path = crate::ops::make_new(dir, Some(name), true)?;
+    let made = run("gocryptfs", &["-init", "--", &path], password).and_then(|(ok, _, err)| {
+        if !ok {
+            return Err(plain(&err));
+        }
+        let conf = format!("{path}/gocryptfs.conf");
+        let (_, out, _) = run("gocryptfs-xray", &["-dumpmasterkey", &conf], password)?;
+        recovery_key(&out).ok_or_else(|| "gocryptfs printed no recovery key".to_string())
+    });
+    match made {
+        Ok(key) => Ok((path, key)),
+        Err(e) => {
+            // Leave nothing half-made behind.
+            let _ = std::fs::remove_dir_all(&path);
+            Err(if e.contains("not available") { "gocryptfs is not installed (sudo pacman -S gocryptfs)".into() } else { e })
+        }
+    }
+}
+
+/// Opens a locked folder; returns the folder where its files can be read. Already open = no password needed.
+pub fn unlock_folder(cipher: &str, password: &str) -> R<String> {
+    let c = Path::new(cipher);
+    if !is_locked_folder(c) {
+        return Err(format!("{cipher} is not a locked folder"));
+    }
+    if let Some(at) = open_view(c) {
+        return Ok(at);
+    }
+    let root = views_root()?;
+    let name = c.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Locked folder".into());
+    // A free, empty mount point: "Private", "Private 2", …
+    let at = (1..100)
+        .map(|n| root.join(if n == 1 { name.clone() } else { format!("{name} {n}") }))
+        .find(|p| std::fs::read_dir(p).map_or(true, |mut d| d.next().is_none()) && !mounts().iter().any(|m| Path::new(&m.dir) == p))
+        .ok_or("No free place to open it")?;
+    std::fs::create_dir_all(&at).map_err(|e| e.to_string())?;
+    let at_s = s(&at);
+    let (ok, _, err) = run("gocryptfs", &["-q", "--", cipher, &at_s], password).map_err(|e| if e.contains("not available") { "gocryptfs is not installed (sudo pacman -S gocryptfs)".into() } else { e })?;
+    if !ok {
+        let _ = std::fs::remove_dir(&at);
+        // gocryptfs says "Password incorrect." on a wrong password.
+        return Err(if err.contains("Password incorrect") { "Wrong password".into() } else { plain(&err) });
+    }
+    Ok(at_s)
 }
 
 /// The address as `gio mount` gets it, or why it is refused. Addresses are typed by the user or come from a
@@ -395,6 +482,15 @@ mod tests {
         assert_eq!(prompts(q), [Prompt::Choice]);
         assert!(answer(&[Prompt::Choice], 0, None, None, false, q).unwrap_err().starts_with("trust:Can’t verify the identity of “box”. This happens"));
         assert_eq!(answer(&[Prompt::Choice], 0, None, None, true, q), Ok("1\n".into()));
+    }
+
+    #[test]
+    fn locked_folder_recovery_key_is_found_and_open_ones_are_not_network() {
+        let out = "Password: \n2a6c4f1e0b9d3c775e8a1f20c4d6b8e971f0a3b29d5c8e640f1a2b3c4d5e6f70\n";
+        assert_eq!(recovery_key(out).as_deref(), Some("2a6c4f1e-0b9d3c77-5e8a1f20-c4d6b8e9-71f0a3b2-9d5c8e64-0f1a2b3c-4d5e6f70"));
+        assert_eq!(recovery_key("no key here\n2a6c-zz"), None);
+        let m = parse_mounts("/home/m/Private /run/user/1000/inode-locked/Private fuse.gocryptfs rw 0 0\n");
+        assert!(!is_network(&m[0]));
     }
 
     #[test]

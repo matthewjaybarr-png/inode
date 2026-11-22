@@ -30,6 +30,7 @@ const PATHS = {
   connect: 'M12 5v14M5 12h14',
   phone: 'M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2',
   locked: 'M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3',
+  vault: 'M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 6.8-1.2', // a locked folder that is open: the shackle is up
 };
 // Sidebar place kinds that draw like a file type.
 const PLACE = { documents: 'doc', pictures: 'image', music: 'audio', videos: 'video', pin: 'folder' };

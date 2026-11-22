@@ -136,7 +136,10 @@ export class Pane {
     if (isAddress(path)) return this.app.net.open(path, this); // a server, phone or locked drive: mounted first, then opened (net.js)
     let listing;
     try { listing = await invoke('list_dir', { path }); }
-    catch (err) { this.app.flash(String(err)); return false; }
+    catch (err) {
+      if (String(err).startsWith('vault:')) return this.app.net.open(String(err), this); // a locked folder: its password first
+      this.app.flash(String(err)); return false;
+    }
     if (push && this.path != null && this.path !== listing.path) { this.back.push(this.path); this.fwd.length = 0; }
     const from = this.path;
     this.resetSearch();

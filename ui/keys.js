@@ -51,6 +51,7 @@ export const ACTIONS = [
   { id: 'rename', group: 'Files', label: 'Rename', keys: ['F2'], vim: ['F2', 'R'], run: (a) => a.ops.rename() },
   { id: 'newFolder', group: 'Files', label: 'New folder', keys: ['Ctrl+Shift+N'], run: (a) => a.ops.newItem(true) },
   { id: 'newFile', group: 'Files', label: 'New file', keys: ['Ctrl+Alt+N'], run: (a) => a.ops.newItem(false) },
+  { id: 'newLocked', group: 'Files', label: 'New locked folder (password)', keys: [], run: (a) => a.net.newLocked() },
   { id: 'copyOther', group: 'Files', label: 'Copy to other pane', keys: ['Ctrl+Shift+C'], vim: ['Ctrl+Shift+C', 'Y'], run: (a) => a.ops.transfer(false) },
   { id: 'moveOther', group: 'Files', label: 'Move to other pane', keys: ['Ctrl+Shift+X'], vim: ['Ctrl+Shift+X', 'M'], run: (a) => a.ops.transfer(true) },
   { id: 'cut', group: 'Files', label: 'Cut', keys: ['Ctrl+X'], vim: ['Ctrl+X', 'X'], run: (a) => a.ops.clip(true) },

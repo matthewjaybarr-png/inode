@@ -88,7 +88,7 @@ export function resolveTyped(text, home) {
 // Sidebar: what to draw. `side` = { hide: [paths], fold: [group names] }. Hiding is only a view choice:
 // a hidden place keeps working everywhere else (typed paths, This PC, pins). Pins are never hidden, only unpinned.
 // Linux adds a Network group (mounted shares, "Connect to server…") and, under Drives, phones and locked encrypted drives.
-const GROUP = (kind) => (kind === 'network' || kind === 'connect' ? 'Network' : ['drive', 'computer', 'phone', 'locked'].includes(kind) ? 'Drives' : 'Places');
+const GROUP = (kind) => (kind === 'network' || kind === 'connect' ? 'Network' : ['drive', 'computer', 'phone', 'locked', 'vault'].includes(kind) ? 'Drives' : 'Places');
 export function sidebarModel(pins, places, side = {}) {
   const hide = new Set(side.hide || []), fold = new Set(side.fold || []);
   const groups = [
@@ -127,7 +127,7 @@ export const TAGS = 'tags:', TAG_COLOURS = ['red', 'orange', 'yellow', 'green', 
 export const placeName = (path) => LISTS.get(path) ?? (path?.startsWith(TAGS) ? `Tagged ${path.slice(TAGS.length)}` : undefined);
 // Not a folder yet: a network address (smb://server/share), a locked drive (luks:/dev/sdb1) or the "Connect to
 // server…" row (connect:). Opening one mounts it first (net.js), and the folder it becomes is what a pane shows.
-export const isAddress = (path) => /^(connect:$|luks:\/|[a-z][a-z0-9+.-]+:\/\/)/i.test(path || '');
+export const isAddress = (path) => /^(connect:$|luks:\/|vault:\/|[a-z][a-z0-9+.-]+:\/\/)/i.test(path || '');
 export const isFolder = (path) => !!path && placeName(path) === undefined && !isAddress(path);
 
 // "pack.tar.gz" -> "pack": the folder name "Extract to folder" uses; '' when the name is not an archive we extract.

@@ -81,10 +81,16 @@ export function setupNet(app) {
         pane.editPath(); pane.input.value = ''; pane.input.placeholder = ADDRESS_HINT; pane.input.setAttribute('aria-label', 'Server address');
         return false;
       }
-      const luks = path.startsWith('luks:'), what = luks ? `the encrypted drive ${path.slice(5)}` : shownAddress(path);
+      const luks = path.startsWith('luks:'), vault = path.startsWith('vault:');
+      const what = luks ? `the encrypted drive ${path.slice(5)}` : vault ? `the locked folder ${path.slice(6).split('/').pop()}` : shownAddress(path);
       try {
         let dir;
-        if (luks) {
+        if (vault) {
+          const got = await fields(`Password for ${what}`, [{ label: 'Password', secret: true }]);
+          if (!got) return false;
+          app.flash(`Unlocking ${what}…`);
+          dir = await invoke('unlock_folder', { folder: path.slice(6), password: got[0] });
+        } else if (luks) {
           const got = await fields(`Passphrase for ${what}`, [{ label: 'Passphrase', secret: true }]);
           if (!got) return false;
           app.flash(`Unlocking ${what}…`);
@@ -102,5 +108,33 @@ export function setupNet(app) {
       }
     },
     phoneNote: PHONE_NOTE,
+
+    // New locked folder (gocryptfs, mounts.rs): name + password twice, then the recovery key, shown this once only.
+    async newLocked(pane = app.pane()) {
+      const where = pane.path;
+      if (!where?.startsWith('/')) return app.flash('Open a folder first: the locked folder is made in it');
+      let name = 'Private';
+      for (;;) {
+        const got = await fields(`New locked folder in ${where}. A forgotten password cannot be reset.`, [{ label: 'Folder name', value: name }, { label: 'Password', secret: true }, { label: 'Password again', secret: true }]);
+        if (!got) return;
+        name = got[0].trim();
+        if (!name || !got[1]) { app.flash('Type a folder name and a password'); continue; }
+        if (got[1] !== got[2]) { app.flash('The two passwords are not the same · type them again'); continue; }
+        let made;
+        try {
+          app.flash(`Making the locked folder ${name}…`);
+          made = await invoke('make_locked', { dir: where, name, password: got[1] });
+        } catch (e) { app.flash(String(e)); continue; }
+        await pane.go(where, { push: false, keep: made[0] });
+        // The key opens the folder if the password is forgotten; it is shown here once and kept nowhere.
+        for (;;) {
+          const r = await app.ops.ask(`Recovery key for ${name}, shown only now. Save it somewhere safe: ${made[1]}`, [{ id: 'copy', label: 'Copy key' }, { id: 'done', label: 'I saved it', primary: true, focus: true }], { copy: (e) => e.key === 'c' });
+          if (r !== 'copy') break;
+          await navigator.clipboard.writeText(made[1]).then(() => app.flash('Recovery key copied'), (e) => app.flash(`Could not copy: ${e}`));
+        }
+        app.flash(`Made the locked folder ${name} · open it and type the password to use it`);
+        return;
+      }
+    },
   };
 }

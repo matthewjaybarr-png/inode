@@ -271,6 +271,14 @@ pub fn list(path: &str) -> R<Listing> {
         return Ok(Listing { path: path.into(), parent: None, entries });
     }
     let dir = PathBuf::from(path);
+    // A locked folder lists its readable view when open; otherwise the UI asks for its password (net.js).
+    #[cfg(target_os = "linux")]
+    if crate::mounts::is_locked_folder(&dir) {
+        return match crate::mounts::open_view(&dir) {
+            Some(at) => list(&at),
+            None => Err(format!("vault:{path}")),
+        };
+    }
     let rd = std::fs::read_dir(&dir).map_err(|e| format!("Cannot open {path}: {e}"))?;
     let mut entries = Vec::new();
     for de in rd.flatten() {
