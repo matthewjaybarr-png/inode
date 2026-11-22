@@ -1,9 +1,20 @@
 # Inode
 
-A keyboard-first, two-pane file manager for [Omarchy](https://omarchy.org). Built with Tauri 2: a Rust
-backend and a plain HTML/JS interface with no bundler.
+A keyboard-first, two-pane file manager for [Omarchy](https://omarchy.org) and Hyprland. It follows your
+Omarchy theme live, can replace the default file manager (and the browser "Open folder" dialog) with one
+command, and undoes that just as easily. Built with Tauri 2: a Rust backend and a plain HTML/JS interface
+with no bundler.
 
-Status: early. It works day to day, but expect rough edges.
+![Inode: grid view with thumbnails on the left, a project folder on the right](docs/screenshot.png)
+
+Status: early. It is my daily file manager, but expect rough edges. Bug reports are welcome.
+
+## Install
+
+- **AppImage:** download the latest from [Releases](https://github.com/matthewjaybarr-png/inode/releases),
+  `chmod +x` it and run it.
+- **Arch / Omarchy (AUR):** `yay -S inode` (builds from source; see `packaging/aur`).
+- **From source:** see Build below.
 
 ## What it does
 
@@ -18,6 +29,7 @@ Status: early. It works day to day, but expect rough edges.
 - Colour tags (seven colours, a Tags list in the sidebar), search inside files (ripgrep when installed), and your own right-click commands as `.toml` files in omanta's format (Settings: Open actions folder).
 - On Linux: network places and Connect to server (Ctrl+K), phones and encrypted drives through gio/udisks, and an opt-in file chooser for other apps (`inode --picker on`).
 - Compress to zip; extract zip, 7z, tar and rar (through `bsdtar`).
+- Locked folders: password-protected folders through `gocryptfs`.
 - Follows the Omarchy theme live.
 - Can be the default file manager: "Show in folder" from browsers opens Inode.
 
@@ -42,7 +54,8 @@ This sets the folder handler, the `org.freedesktop.FileManager1` service and the
 `~/.config/hypr/bindings.lua`, all per user. `inode --default off` puts everything back as it was, and
 `inode --default status` shows what is active.
 
-Optional tools: `wl-clipboard` (copy and paste with other apps), `bsdtar` (extract), `udisks2` (eject).
+Optional tools: `wl-clipboard` (copy and paste with other apps), `bsdtar` (extract), `udisks2` (eject),
+`ripgrep` (faster content search), `gocryptfs` (locked folders).
 
 ## Credits
 

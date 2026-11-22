@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: write # only the release job on a tag uses it
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04 # oldest glibc we support, so the AppImage runs on more systems
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Tauri system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      - run: npm test
+      - run: cargo test --lib
+        working-directory: src-tauri
+      - name: Build AppImage
+        run: npm run build -- --bundles appimage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inode-appimage
+          path: src-tauri/target/release/bundle/appimage/*.AppImage
+      - name: Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/target/release/bundle/appimage/*.AppImage
+          generate_release_notes: true

@@ -22,11 +22,11 @@ test('sizes', () => {
 });
 
 test('linux crumbs', () => {
-  assert.deepEqual(crumbs('/home/matt'), [{ name: '/', path: '/' }, { name: 'home', path: '/home' }, { name: 'matt', path: '/home/matt' }]);
+  assert.deepEqual(crumbs('/home/alex'), [{ name: '/', path: '/' }, { name: 'home', path: '/home' }, { name: 'alex', path: '/home/alex' }]);
 });
 
 test('windows crumbs start at This PC', () => {
-  assert.deepEqual(crumbs('C:\\Users\\worktest').map((c) => c.path), ['', 'C:\\', 'C:\\Users', 'C:\\Users\\worktest']);
+  assert.deepEqual(crumbs('C:\\Users\\alex').map((c) => c.path), ['', 'C:\\', 'C:\\Users', 'C:\\Users\\alex']);
   assert.deepEqual(crumbs(''), [{ name: 'This PC', path: '' }]);
 });
 
