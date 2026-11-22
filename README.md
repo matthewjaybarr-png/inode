@@ -13,7 +13,8 @@ Status: early. It is my daily file manager, but expect rough edges. Bug reports 
 
 - **AppImage:** download the latest from [Releases](https://github.com/matthewjaybarr-png/inode/releases),
   `chmod +x` it and run it.
-- **Arch / Omarchy (AUR):** `yay -S inode` (builds from source; see `packaging/aur`).
+- **Arch / Omarchy:** an AUR package is coming. Until then, build it with the PKGBUILD in this repo:
+  `cd packaging/aur && makepkg -si`.
 - **From source:** see Build below.
 
 ## What it does
