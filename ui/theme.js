@@ -1,6 +1,7 @@
 // App theme. The suite has one theme (default Neon Ridge) and each app may pick its own instead; both live in one
 // small file the apps share. A choice is a bundled theme, "system" (the stylesheet's own light/dark colours, which
-// follow Windows) or "desktop" (Omarchy's colors.toml on Linux, the Orbit / Omarchy Overlay theme on Windows).
+// follow Windows) or "desktop" (Omarchy's colors.toml on Linux, the Orbit / Omarchy Overlay theme on Windows; without one it
+// falls back to "system").
 // Only the app's own colours change: nothing here touches a document's content.
 
 const hex = (s) => { const m = /^#?([0-9a-f]{6})$/i.exec(String(s || '').trim()); return m ? [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16)) : null; };
@@ -60,7 +61,7 @@ export const THEMES = ['aether', 'alpenglow-night', 'catppuccin', 'catppuccin-la
 export const DEFAULT = 'neon-ridge';
 // What an app shows: its own choice, else the suite's, else the default.
 export const pick = (c) => c?.own || c?.suite || DEFAULT;
-export const themeLabel = (id) => (id === 'system' ? 'Follow system (light / dark)' : id === 'desktop' ? 'Follow desktop (Orbit / Omarchy)'
+export const themeLabel = (id) => (id === 'system' ? 'Follow system (light / dark)' : id === 'desktop' ? 'Follow desktop'
   : id.split('-').map((w) => w[0].toUpperCase() + w.slice(1)).join(' '));
 
 const tauri = () => window.__TAURI__?.core?.invoke;
@@ -120,16 +121,23 @@ export async function openThemePicker() {
     wrap.append(el('b', 'font-weight:600', label), sel, el('span', 'display:block;margin-top:3px;font-size:12px;color:var(--muted,#666)', hint));
     return [wrap, sel];
   };
-  const [own, ownSel] = row('This app', 'An own theme stays until you choose "Use the suite theme" again.', 'app', c.own || '', 'Use the suite theme');
-  const [suite] = row('Whole suite', 'Every app without its own theme follows this.', 'suite', c.suite || DEFAULT);
-  const note = el('div', 'font-size:12px;color:var(--muted,#666);margin-bottom:12px', 'Only the app changes colour. Documents, sheets, PDFs and slides keep their own colours, on screen and in print.');
+  // No suite (public edition): one row for this app alone. A suite build's backend leaves `shared` out.
+  const shared = c.shared !== false;
+  const [own, ownSel] = shared
+    ? row('This app', 'An own theme stays until you choose "Use the suite theme" again.', 'app', c.own || '', 'Use the suite theme')
+    : row('App theme', '"Follow desktop" uses the Omarchy theme where there is one, else the system\'s light or dark.', 'app', pick(c));
+  const rows = [own];
+  if (shared) rows.push(row('Whole suite', 'Every app without its own theme follows this.', 'suite', c.suite || DEFAULT)[0]);
+  const note = el('div', 'font-size:12px;color:var(--muted,#666);margin-bottom:12px', shared
+    ? 'Only the app changes colour. Documents, sheets, PDFs and slides keep their own colours, on screen and in print.'
+    : 'Only the app changes colour. Previews keep the files\' own colours.');
   const close = el('button', 'padding:5px 16px;border-radius:6px;font:inherit;background:var(--accent,#06c);color:var(--accent-ink,#fff);border:1px solid var(--accent,#06c);float:right', 'Close');
   close.type = 'button';
   const shut = () => back.remove();
   close.onclick = shut;
   back.onmousedown = (e) => { if (e.target === back) shut(); };
   back.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape') { e.preventDefault(); shut(); } });
-  card.append(el('div', 'font-size:16px;font-weight:600;margin-bottom:14px', 'Theme'), own, suite, note, close);
+  card.append(el('div', 'font-size:16px;font-weight:600;margin-bottom:14px', 'Theme'), ...rows, note, close);
   back.append(card); document.body.append(back);
   ownSel.focus();
 }

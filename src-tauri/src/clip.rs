@@ -9,38 +9,49 @@ fn file_type(offered: &str) -> Option<&'static str> {
     ["x-special/gnome-copied-files", "text/uri-list"].into_iter().find(|t| offered.lines().any(|l| l.trim() == *t))
 }
 
-/// wl-copy offers one type per run, so it is text/uri-list: every file manager, browser and chat app pastes files
-/// from it, while x-special/gnome-copied-files is read by GNOME-style file managers only. The price: other apps
+/// Wayland sessions use wl-clipboard; X11 sessions (no WAYLAND_DISPLAY) use xclip.
+#[cfg(not(windows))]
+fn wayland() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())
+}
+
+/// wl-copy and xclip offer one type per run, so it is text/uri-list: every file manager, browser and chat app pastes
+/// files from it, while x-special/gnome-copied-files is read by GNOME-style file managers only. The price: other apps
 /// see a Cut as a copy (inside Inode it stays a cut).
 /// shortcut: one clipboard type, so no cut flag for other apps; offer both from an own Wayland data source
 /// (wl-clipboard-rs) if moving by cut and paste into Nautilus is wanted.
 #[cfg(not(windows))]
 pub fn write(_paths: &[String], uris: &str, _mv: bool) -> R<()> {
     use std::{io::Write, os::unix::process::CommandExt, process::Stdio};
-    // Its own process group and no pipes left open: wl-copy forks a holder that keeps serving the clipboard after
-    // this returns, and after Inode quits. The parent exits once the clipboard is set, so wait() is short.
-    let mut child = crate::fs::clean(std::process::Command::new("wl-copy"))
-        .args(["--type", "text/uri-list"])
+    let (prog, args): (&str, &[&str]) =
+        if wayland() { ("wl-copy", &["--type", "text/uri-list"]) } else { ("xclip", &["-selection", "clipboard", "-t", "text/uri-list", "-i"]) };
+    // Its own process group and no pipes left open: wl-copy and xclip fork a holder that keeps serving the clipboard
+    // after this returns, and after Inode quits. The parent exits once the clipboard is set, so wait() is short.
+    let mut child = crate::fs::clean(std::process::Command::new(prog))
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0)
         .spawn()
-        .map_err(|e| format!("wl-copy: {e}"))?;
+        .map_err(|e| format!("{prog}: {e}"))?;
     let sent = child.stdin.take().unwrap().write_all(uris.as_bytes());
     let ok = child.wait().map_err(|e| e.to_string())?.success();
-    if ok && sent.is_ok() { Ok(()) } else { Err("wl-copy could not set the clipboard".into()) }
+    if ok && sent.is_ok() { Ok(()) } else { Err(format!("{prog} could not set the clipboard")) }
 }
 
-/// The clipboard's file payload ("" when it holds no files); Err when there is no wl-paste to ask.
+/// The clipboard's file payload ("" when it holds no files); Err when there is no wl-paste / xclip to ask.
 #[cfg(not(windows))]
 pub fn read() -> R<String> {
-    // An empty clipboard makes wl-paste fail with no output, which reads as "no files".
+    let prog = if wayland() { "wl-paste" } else { "xclip" };
+    // An empty clipboard makes wl-paste / xclip fail with no output, which reads as "no files".
     let paste = |args: &[&str]| {
-        crate::fs::clean(std::process::Command::new("wl-paste")).args(args).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).map_err(|e| format!("wl-paste: {e}"))
+        crate::fs::clean(std::process::Command::new(prog)).args(args).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).map_err(|e| format!("{prog}: {e}"))
     };
-    match file_type(&paste(&["--list-types"])?) {
-        Some(t) => paste(&["--no-newline", "--type", t]),
+    let types = if wayland() { paste(&["--list-types"])? } else { paste(&["-selection", "clipboard", "-t", "TARGETS", "-o"])? };
+    match file_type(&types) {
+        Some(t) if wayland() => paste(&["--no-newline", "--type", t]),
+        Some(t) => paste(&["-selection", "clipboard", "-t", t, "-o"]),
         None => Ok(String::new()),
     }
 }

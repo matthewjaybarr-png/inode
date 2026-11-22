@@ -1,5 +1,5 @@
 pkgbase = inode
-	pkgdesc = Keyboard-first, two-pane file manager for Omarchy and Hyprland
+	pkgdesc = Keyboard-first, two-pane file manager for Linux
 	pkgver = 0.7.0
 	pkgrel = 1
 	url = https://github.com/matthewjaybarr-png/inode
@@ -10,7 +10,8 @@ pkgbase = inode
 	depends = webkit2gtk-4.1
 	depends = gtk3
 	depends = libayatana-appindicator
-	optdepends = wl-clipboard: copy and paste with other apps
+	optdepends = wl-clipboard: copy and paste with other apps (Wayland)
+	optdepends = xclip: copy and paste with other apps (X11)
 	optdepends = libarchive: extract archives (bsdtar)
 	optdepends = udisks2: eject and encrypted drives
 	optdepends = ripgrep: faster search inside files

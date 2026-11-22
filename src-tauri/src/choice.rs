@@ -11,10 +11,11 @@ fn file() -> Option<PathBuf> {
     base.map(|b| b.join("inode").join("theme.json"))
 }
 
-/// `{ suite, own }`, the shape ui/theme.js reads; "suite" is just the default here: follow the desktop.
+/// `{ suite, own, shared }`, the shape ui/theme.js reads; "suite" is just the default here: follow the desktop.
+/// `shared: false` tells the picker there is no suite, so it shows one row for Inode alone.
 pub fn theme() -> serde_json::Value {
     let v: serde_json::Value = file().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-    serde_json::json!({ "suite": v["suite"].as_str().unwrap_or("desktop"), "own": v["own"].as_str() })
+    serde_json::json!({ "suite": v["suite"].as_str().unwrap_or("desktop"), "own": v["own"].as_str(), "shared": false })
 }
 
 pub fn set_theme(own: bool, value: Option<&str>) -> Result<(), String> {

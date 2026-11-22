@@ -558,7 +558,8 @@ pub(crate) fn clean(mut c: std::process::Command) -> std::process::Command {
     c
 }
 
-/// A terminal in `dir`: Windows Terminal, else PowerShell; on Linux xdg-terminal-exec, else $TERMINAL.
+/// A terminal in `dir`: Windows Terminal, else PowerShell; on Linux xdg-terminal-exec, else $TERMINAL, else the first
+/// common terminal that is installed.
 pub fn open_terminal(dir: &str) -> R<()> {
     terminal(dir, None)
 }
@@ -581,7 +582,11 @@ pub fn terminal(dir: &str, run: Option<Vec<String>>) -> R<()> {
         let mut t = vec![("xdg-terminal-exec".to_string(), cd.clone())];
         if let Ok(term) = std::env::var("TERMINAL") {
             // A bare $TERMINAL opens in `dir` by itself; a command goes after -e, which most terminals take.
-            t.push((term, if e.is_empty() { e } else { [e, cd].concat() }));
+            t.push((term, if e.is_empty() { e } else { [e, cd.clone()].concat() }));
+        }
+        // Then the usual terminals of other desktops, each with the flag that runs a command in it.
+        for (prog, flag) in [("x-terminal-emulator", "-e"), ("gnome-terminal", "--"), ("ptyxis", "--"), ("konsole", "-e"), ("xfce4-terminal", "-x"), ("kitty", ""), ("foot", ""), ("alacritty", "-e"), ("xterm", "-e")] {
+            t.push((prog.into(), std::iter::once(flag).filter(|f| !f.is_empty()).map(String::from).chain(cd.iter().cloned()).collect()));
         }
         t
     };

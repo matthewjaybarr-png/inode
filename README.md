@@ -1,7 +1,7 @@
 # Inode
 
-A keyboard-first, two-pane file manager for [Omarchy](https://omarchy.org) and Hyprland. It follows your
-Omarchy theme live, can replace the default file manager (and the browser "Open folder" dialog) with one
+A keyboard-first, two-pane file manager for Linux (any desktop, Wayland or X11). On
+[Omarchy](https://omarchy.org) it follows your theme live. It can replace the default file manager (and the browser "Open folder" dialog) with one
 command, and undoes that just as easily. Built with Tauri 2: a Rust backend and a plain HTML/JS interface
 with no bundler.
 
@@ -13,7 +13,7 @@ Status: early. It is my daily file manager, but expect rough edges. Bug reports 
 
 - **AppImage:** download the latest from [Releases](https://github.com/matthewjaybarr-png/inode/releases),
   `chmod +x` it and run it.
-- **Arch / Omarchy:** an AUR package is coming. Until then, build it with the PKGBUILD in this repo:
+- **Arch:** an AUR package is coming. Until then, build it with the PKGBUILD in this repo:
   `cd packaging/aur && makepkg -si`.
 - **From source:** see Build below.
 
@@ -31,7 +31,7 @@ Status: early. It is my daily file manager, but expect rough edges. Bug reports 
 - On Linux: network places and Connect to server (Ctrl+K), phones and encrypted drives through gio/udisks, and an opt-in file chooser for other apps (`inode --picker on`).
 - Compress to zip; extract zip, 7z, tar and rar (through `bsdtar`).
 - Locked folders: password-protected folders through `gocryptfs`.
-- Follows the Omarchy theme live.
+- Light and dark themes plus a theme picker; follows the Omarchy theme live when there is one.
 - Can be the default file manager: "Show in folder" from browsers opens Inode.
 
 ## Build
@@ -51,11 +51,13 @@ Tests: `npm test` and `cargo test --lib` in `src-tauri`.
 inode --default on
 ```
 
-This sets the folder handler, the `org.freedesktop.FileManager1` service and the file-manager keys in
-`~/.config/hypr/bindings.lua`, all per user. `inode --default off` puts everything back as it was, and
+This sets the folder handler and the `org.freedesktop.FileManager1` service, all per user, on any desktop
+that follows the freedesktop standards (GNOME, KDE, Xfce, Hyprland and others). On Hyprland it also points
+the file-manager keys in `~/.config/hypr/bindings.lua` at Inode; elsewhere, bind a key to `inode` in your
+desktop's settings. `inode --default off` puts everything back as it was, and
 `inode --default status` shows what is active.
 
-Optional tools: `wl-clipboard` (copy and paste with other apps), `bsdtar` (extract), `udisks2` (eject),
+Optional tools: `wl-clipboard` on Wayland or `xclip` on X11 (copy and paste with other apps), `bsdtar` (extract), `udisks2` (eject),
 `ripgrep` (faster content search), `gocryptfs` (locked folders).
 
 ## Credits

@@ -1,5 +1,5 @@
-//! `inode --default on|off|status`: make Inode the default file manager on Omarchy (Hyprland), and undo it exactly.
-//! Three per-user pieces: the desktop entry + mime default, D-Bus activation of FileManager1, the Hyprland key.
+//! `inode --default on|off|status`: make Inode the default file manager on any freedesktop desktop, and undo it exactly.
+//! Three per-user pieces: the desktop entry + mime default, D-Bus activation of FileManager1, and on Hyprland (Omarchy) the file-manager key.
 //! `inode --picker on|off|status`: make Inode the file chooser other apps' Open and Save dialogs use (portal.rs),
 //! and undo it exactly. Also three per-user pieces: the portal file, D-Bus activation of the portal name, and the
 //! FileChooser line of the user's portals.conf. Both are opt-in; nothing here runs unless asked for.
@@ -367,7 +367,7 @@ pub fn cli(args: &[String]) -> Option<i32> {
                 reload_dbus();
                 println!("Inode is now the default file manager (inode --default off undoes it).");
                 if !key {
-                    println!("No {} here, so no key was bound.", d.bindings().display());
+                    println!("Not Hyprland (no {}), so no key was bound: bind one to `inode` in your desktop's keyboard settings.", d.bindings().display());
                 }
             }
             Some("off") => match off(&d).map_err(|e| e.to_string())? {
@@ -383,7 +383,7 @@ pub fn cli(args: &[String]) -> Option<i32> {
             },
             Some("status") => {
                 let s = status(&d, &exe, mime_default().as_deref());
-                for (name, on) in ["Opens folders (desktop entry + mime default)", "Show in folder (D-Bus FileManager1)", "File manager key (Hyprland)"].iter().zip(s) {
+                for (name, on) in ["Opens folders (desktop entry + mime default)", "Show in folder (D-Bus FileManager1)", "File manager key (Hyprland only)"].iter().zip(s) {
                     println!("{name}: {}", if on { "Inode" } else { "not Inode" });
                 }
             }

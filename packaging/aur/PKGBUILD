@@ -3,13 +3,14 @@
 pkgname=inode
 pkgver=0.7.0
 pkgrel=1
-pkgdesc='Keyboard-first, two-pane file manager for Omarchy and Hyprland'
+pkgdesc='Keyboard-first, two-pane file manager for Linux'
 arch=('x86_64')
 url='https://github.com/matthewjaybarr-png/inode'
 license=('GPL-3.0-or-later')
 depends=('webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator')
 makedepends=('cargo' 'npm')
-optdepends=('wl-clipboard: copy and paste with other apps'
+optdepends=('wl-clipboard: copy and paste with other apps (Wayland)'
+            'xclip: copy and paste with other apps (X11)'
             'libarchive: extract archives (bsdtar)'
             'udisks2: eject and encrypted drives'
             'ripgrep: faster search inside files'
