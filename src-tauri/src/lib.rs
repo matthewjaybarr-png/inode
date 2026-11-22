@@ -1,5 +1,5 @@
 mod choice;
-mod clip;
+pub mod clip;
 #[cfg(target_os = "linux")]
 mod dbus;
 mod desk;

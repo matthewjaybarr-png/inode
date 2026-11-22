@@ -23,6 +23,12 @@ tauri-plugin-single-instance = "2"
 base64 = "0.23" # already in the tree through tauri
 toml = "1" # custom action files; already in the tree through tauri-utils
 
+[target.'cfg(not(windows))'.dependencies]
+# The clipboard holder (clip::hold) offers text/uri-list AND x-special/gnome-copied-files at once; wl-copy and
+# xclip offer one type per run.
+wl-clipboard-rs = "0.9"
+x11rb = "0.13"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5" # same crate the single-instance plugin already brings in
 

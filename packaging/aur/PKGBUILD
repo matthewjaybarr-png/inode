@@ -9,8 +9,8 @@ url='https://github.com/matthewjaybarr-png/inode'
 license=('GPL-3.0-or-later')
 depends=('webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator')
 makedepends=('cargo' 'npm')
-optdepends=('wl-clipboard: copy and paste with other apps (Wayland)'
-            'xclip: copy and paste with other apps (X11)'
+optdepends=('wl-clipboard: paste files copied in other apps (Wayland)'
+            'xclip: paste files copied in other apps (X11)'
             'libarchive: extract archives (bsdtar)'
             'udisks2: eject and encrypted drives'
             'ripgrep: faster search inside files'

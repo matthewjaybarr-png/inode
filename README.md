@@ -57,7 +57,7 @@ the file-manager keys in `~/.config/hypr/bindings.lua` at Inode; elsewhere, bind
 desktop's settings. `inode --default off` puts everything back as it was, and
 `inode --default status` shows what is active.
 
-Optional tools: `wl-clipboard` on Wayland or `xclip` on X11 (copy and paste with other apps), `bsdtar` (extract), `udisks2` (eject),
+Optional tools: `wl-clipboard` on Wayland or `xclip` on X11 (pasting files copied in other apps), `bsdtar` (extract), `udisks2` (eject),
 `ripgrep` (faster content search), `gocryptfs` (locked folders).
 
 ## Credits
