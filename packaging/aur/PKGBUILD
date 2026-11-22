@@ -8,14 +8,14 @@ arch=('x86_64')
 url='https://github.com/matthewjaybarr-png/inode'
 license=('GPL-3.0-or-later')
 depends=('webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator')
-makedepends=('rust' 'cargo' 'npm')
+makedepends=('cargo' 'npm')
 optdepends=('wl-clipboard: copy and paste with other apps'
             'libarchive: extract archives (bsdtar)'
             'udisks2: eject and encrypted drives'
             'ripgrep: faster search inside files'
             'gocryptfs: locked folders')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP') # shortcut: fill with updpkgsums once the v0.7.0 tag exists
+sha256sums=('ec44decbb7558b2524822323cbe8f24bd158017548e99c58c5b8dfe1676c7d4e')
 
 build() {
   cd "$pkgname-$pkgver"

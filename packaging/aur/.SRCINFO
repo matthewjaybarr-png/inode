@@ -1,0 +1,21 @@
+pkgbase = inode
+	pkgdesc = Keyboard-first, two-pane file manager for Omarchy and Hyprland
+	pkgver = 0.7.0
+	pkgrel = 1
+	url = https://github.com/matthewjaybarr-png/inode
+	arch = x86_64
+	license = GPL-3.0-or-later
+	makedepends = cargo
+	makedepends = npm
+	depends = webkit2gtk-4.1
+	depends = gtk3
+	depends = libayatana-appindicator
+	optdepends = wl-clipboard: copy and paste with other apps
+	optdepends = libarchive: extract archives (bsdtar)
+	optdepends = udisks2: eject and encrypted drives
+	optdepends = ripgrep: faster search inside files
+	optdepends = gocryptfs: locked folders
+	source = inode-0.7.0.tar.gz::https://github.com/matthewjaybarr-png/inode/archive/refs/tags/v0.7.0.tar.gz
+	sha256sums = ec44decbb7558b2524822323cbe8f24bd158017548e99c58c5b8dfe1676c7d4e
+
+pkgname = inode
