@@ -73,6 +73,15 @@ export function setupNet(app) {
     }
   };
 
+  // The key opens a locked folder if the password is forgotten; it is shown here once and kept nowhere.
+  const showKey = async (name, key) => {
+    for (;;) {
+      const r = await app.ops.ask(`Recovery key for ${name}, shown only now. Save it somewhere safe: ${key}`, [{ id: 'copy', label: 'Copy key' }, { id: 'done', label: 'I saved it', primary: true, focus: true }], { copy: (e) => e.key === 'c' });
+      if (r !== 'copy') return;
+      await navigator.clipboard.writeText(key).then(() => app.flash('Recovery key copied'), (e) => app.flash(`Could not copy: ${e}`));
+    }
+  };
+
   app.net = {
     // True once the pane shows the folder, like Pane.go.
     async open(path, pane = app.pane()) {
@@ -126,13 +135,28 @@ export function setupNet(app) {
           made = await invoke('make_locked', { dir: where, name, password: got[1] });
         } catch (e) { app.flash(String(e)); continue; }
         await pane.go(where, { push: false, keep: made[0] });
-        // The key opens the folder if the password is forgotten; it is shown here once and kept nowhere.
-        for (;;) {
-          const r = await app.ops.ask(`Recovery key for ${name}, shown only now. Save it somewhere safe: ${made[1]}`, [{ id: 'copy', label: 'Copy key' }, { id: 'done', label: 'I saved it', primary: true, focus: true }], { copy: (e) => e.key === 'c' });
-          if (r !== 'copy') break;
-          await navigator.clipboard.writeText(made[1]).then(() => app.flash('Recovery key copied'), (e) => app.flash(`Could not copy: ${e}`));
-        }
+        await showKey(name, made[1]);
         app.flash(`Made the locked folder ${name} · open it and type the password to use it`);
+        return;
+      }
+    },
+
+    // Locks an existing folder (mounts.rs lock_existing): its files are copied in and checked, the original goes to the Trash.
+    async lockExisting(path, pane = app.pane()) {
+      const name = path.split('/').pop();
+      for (;;) {
+        const got = await fields(`Lock ${name} with a password. The original goes to the Trash; a forgotten password cannot be reset.`, [{ label: 'Password', secret: true }, { label: 'Password again', secret: true }]);
+        if (!got) return;
+        if (!got[0]) { app.flash('Type a password'); continue; }
+        if (got[0] !== got[1]) { app.flash('The two passwords are not the same · type them again'); continue; }
+        let made;
+        try {
+          app.flash(`Locking ${name}: copying its files in…`);
+          made = await invoke('lock_existing', { folder: path, password: got[0] });
+        } catch (e) { app.flash(String(e)); await pane.go(pane.path, { push: false }); return; }
+        await pane.go(pane.path, { push: false, keep: made[0] });
+        await showKey(name, made[1]);
+        app.flash(`${name} is locked · its unlocked original is in the Trash: empty the Trash to remove it for good`);
         return;
       }
     },

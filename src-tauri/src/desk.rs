@@ -61,6 +61,18 @@ pub async fn make_locked(dir: String, name: String, password: String) -> R<(Stri
     }
 }
 
+/// Locks an existing folder in place (the original goes to the Trash); returns [its path, the recovery key].
+#[tauri::command]
+pub async fn lock_existing(folder: String, password: String) -> R<(String, String)> {
+    #[cfg(target_os = "linux")]
+    return tauri::async_runtime::spawn_blocking(move || crate::mounts::lock_existing(&folder, &password)).await.map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (folder, password);
+        Err(NO.into())
+    }
+}
+
 /// Opens a locked folder; returns the folder its readable files are in.
 #[tauri::command]
 pub async fn unlock_folder(folder: String, password: String) -> R<String> {

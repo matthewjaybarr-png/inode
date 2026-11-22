@@ -278,7 +278,7 @@ const app = {
       ? [it('Open', 'open'), !entry.dir && own('Open with…', () => this.openWith(entry.path, ev)), entry.dir && it('Open in new tab', 'openNewTab'), entry.dir && own('Open in terminal', () => this.openTerminal(entry.path)), null,
          it('Cut', 'cut'), it('Copy', 'copy'), entry.dir && own('Paste into folder', () => this.ops.paste(entry.path)), it('Copy path', 'copyPath'), null,
          it('Copy to other pane', 'copyOther', two), it('Move to other pane', 'moveOther', two), null,
-         it('Rename', 'rename'), it('Create shortcut', 'shortcut'), it('Compress to .zip', 'compress'), !!stem && it('Extract here', 'extractHere'), !!stem && it(`Extract to folder ${stem}`, 'extractTo'), it(pinned(entry.path) ? 'Unpin from sidebar' : 'Pin to sidebar', 'pinItem'), it(TRASH_LABEL, 'trash'), null,
+         it('Rename', 'rename'), it('Create shortcut', 'shortcut'), it('Compress to .zip', 'compress'), entry.dir && navigator.platform.startsWith('Linux') && own('Lock with password…', () => this.net.lockExisting(entry.path)), !!stem && it('Extract here', 'extractHere'), !!stem && it(`Extract to folder ${stem}`, 'extractTo'), it(pinned(entry.path) ? 'Unpin from sidebar' : 'Pin to sidebar', 'pinItem'), it(TRASH_LABEL, 'trash'), null,
          it(this.state.preview ? 'Hide preview' : 'Show preview', 'preview'), props()]
       : [it('New folder', 'newFolder'), it('New file', 'newFile'), navigator.platform.startsWith('Linux') && it('New locked folder…', 'newLocked'), it('Paste', 'paste'), null,
          it('Open in terminal', 'terminal'), own('Copy folder path', () => this.copyPath([here])), it(pinned(here) ? 'Unpin this folder' : 'Pin this folder', 'pin'), it('Alias this folder…', 'alias'), null,

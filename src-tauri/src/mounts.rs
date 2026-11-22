@@ -274,6 +274,55 @@ pub fn make_locked(dir: &str, name: &str, password: &str) -> R<(String, String)>
     }
 }
 
+/// Locks an existing folder: its files are copied into a new locked folder beside it and compared, and only then is
+/// the original moved to the Trash and the locked folder given its name. Any failure before that leaves the original
+/// untouched. Returns (the locked folder's path, the recovery key).
+pub fn lock_existing(folder: &str, password: &str) -> R<(String, String)> {
+    let f = Path::new(folder);
+    let meta = std::fs::symlink_metadata(f).map_err(|e| e.to_string())?;
+    if !meta.is_dir() {
+        return Err(format!("{folder} is not a folder"));
+    }
+    if is_locked_folder(f) {
+        return Err(format!("{folder} is already a locked folder"));
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if f.parent().is_none() || home.as_deref() == Some(f) || mounts().iter().any(|m| Path::new(&m.dir) == f) {
+        return Err(format!("{folder} cannot be locked: lock a folder inside it instead"));
+    }
+    let (parent, name) = (s(f.parent().unwrap()), f.file_name().unwrap().to_string_lossy().into_owned());
+    let (tmp, key) = make_locked(&parent, &format!(".{name}.locking"), password)?;
+    let view = unlock_folder(&tmp, password);
+    let copied = view.as_ref().map_err(String::clone).and_then(|v| {
+        let (ok, _, err) = run("cp", &["-a", "--reflink=auto", "--", &format!("{folder}/."), &format!("{v}/")], "")?;
+        if !ok {
+            return Err(format!("Could not copy the files in: {}", plain(&err)));
+        }
+        let (same, out, err) = run("diff", &["-rq", "--no-dereference", "--", folder, v], "")?;
+        if !same {
+            return Err(format!("The locked copy did not match the original: {}", plain(if out.is_empty() { &err } else { &out })));
+        }
+        Ok(())
+    });
+    let closed = view.as_ref().map_or(Some(Ok(())), |v| eject(v));
+    if let Err(e) = copied.and(closed.unwrap_or(Ok(()))) {
+        if let (Ok(v), Some(_)) = (&view, open_view(Path::new(&tmp))) {
+            let _ = eject(v);
+        }
+        // Only the half-made copy goes; never while it is still mounted.
+        if open_view(Path::new(&tmp)).is_none() {
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+        return Err(format!("{e} · {name} was not changed"));
+    }
+    let t = crate::ops::trash(&[folder.to_string()]);
+    if let Some(e) = t.failed.first() {
+        return Err(format!("The locked copy is ready as {tmp}, but {name} could not be moved to the Trash: {e}"));
+    }
+    std::fs::rename(&tmp, folder).map_err(|e| format!("{name} is in the Trash and the locked copy is {tmp}, but it could not be renamed: {e}"))?;
+    Ok((folder.to_string(), key))
+}
+
 /// Opens a locked folder; returns the folder where its files can be read. Already open = no password needed.
 pub fn unlock_folder(cipher: &str, password: &str) -> R<String> {
     let c = Path::new(cipher);
@@ -402,6 +451,32 @@ pub fn connect(address: &str, user: Option<&str>, password: Option<&str>, trust:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Needs gocryptfs + FUSE (skipped without them): the folder becomes locked, keeps its files, the original is in the Trash.
+    #[test]
+    fn lock_existing_folder() {
+        if run("gocryptfs", &["-version"], "").is_err() || std::env::var_os("XDG_RUNTIME_DIR").is_none() {
+            return;
+        }
+        let d = std::env::temp_dir().join(format!("inode-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("data")).unwrap();
+        std::env::set_var("XDG_DATA_HOME", d.join("data")); // a private trash, not the real one
+        let f = d.join("Secret");
+        std::fs::create_dir_all(f.join("sub")).unwrap();
+        std::fs::write(f.join("sub/a.txt"), "hello").unwrap();
+        let (path, key) = lock_existing(&s(&f), "pw").unwrap();
+        assert_eq!(path, s(&f));
+        assert_eq!(key.len(), 71);
+        assert!(is_locked_folder(&f));
+        assert!(!d.join(".Secret.locking").exists());
+        assert!(d.join("data/Trash/files/Secret/sub/a.txt").is_file());
+        let v = unlock_folder(&path, "pw").unwrap();
+        assert_eq!(std::fs::read_to_string(Path::new(&v).join("sub/a.txt")).unwrap(), "hello");
+        eject(&v).unwrap().unwrap();
+        assert!(lock_existing(&path, "pw").unwrap_err().contains("already"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn mount_table_is_parsed_and_network_mounts_told_apart() {
