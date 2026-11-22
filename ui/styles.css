@@ -89,6 +89,7 @@ button { cursor: default; background: none; border: 0; }
 .item.link .nm { font-style: italic; }
 .ico { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; color: var(--muted); }
 .t-folder { color: var(--accent); fill: var(--accent-soft); }
+.item .t-locked { color: var(--accent); fill: var(--accent-soft); } /* a locked folder in a list: folder colours, padlock shape */
 .t-image { color: #a35fd6; } .t-video { color: #d6457a; } .t-audio { color: #d9822b; } .t-archive { color: #b58a2a; }
 .t-code { color: #2a9aa6; } .t-doc { color: #3d7fd9; } .t-pdf { color: #d64a3d; } .t-sheet { color: #2e9a5a; } .t-slides { color: #d9662b; }
 #sidebar .place .ico { vertical-align: -3px; margin-right: 8px; }

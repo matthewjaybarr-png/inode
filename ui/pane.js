@@ -190,9 +190,10 @@ export class Pane {
     this.rows.forEach((e, i) => {
       const r = el('div', `${this.grid ? 'tile' : 'row'} item${e.dir ? ' dir' : ''}${e.hidden ? ' hidden-file' : ''}${e.link ? ' link' : ''}`);
       r.setAttribute('role', 'option'); r.dataset.i = i;
-      const name = el('span', 'c-name'), ico = icon(iconFor(e.name, e.dir));
+      const name = el('span', 'c-name'), ico = icon(e.locked ? 'locked' : iconFor(e.name, e.dir));
       // A tile: the picture (the type icon until a thumbnail loads, see loadPic) above the name.
       if (this.grid) { const pic = el('span', 'pic'); pic.ico = ico; pic.append(ico); r.append(pic); r.title = e.name; if (!e.dir && !e.noPic) this.io.observe(pic); } else name.append(ico);
+      if (e.locked) r.title = `${e.name} · locked: open it and type the password`;
       name.append(el('span', 'nm', e.name));
       if (tags[e.path]) { const d = el('span', 'tag-dot'); d.style.background = `var(--tag-${tags[e.path]})`; d.title = `Tagged ${tags[e.path]}`; d.setAttribute('role', 'img'); d.setAttribute('aria-label', d.title); name.append(d); }
       // Trash and Recent show the folder each item came from / lives in.
