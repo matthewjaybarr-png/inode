@@ -65,4 +65,4 @@ from them.
 
 ## License
 
-MIT
+GPL-3.0-or-later, see LICENSE. Copyright (C) 2026 Matt Barr.

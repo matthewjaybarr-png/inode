@@ -2,7 +2,7 @@
 name = "inode"
 version = "0.7.0"
 description = "Inode file manager"
-license = "MIT"
+license = "GPL-3.0-or-later"
 authors = ["Matt Barr"]
 edition = "2021"
 
