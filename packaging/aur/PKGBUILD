@@ -1,7 +1,7 @@
 # Maintainer: Matt Barr
 # AUR package for Inode, built from the tagged source. Bump pkgver, then `updpkgsums` and `makepkg --printsrcinfo > .SRCINFO`.
 pkgname=inode
-pkgver=0.7.3
+pkgver=0.7.4
 pkgrel=1
 pkgdesc='Keyboard-first, two-pane file manager for Linux'
 arch=('x86_64')
@@ -16,7 +16,7 @@ optdepends=('wl-clipboard: paste files copied in other apps (Wayland)'
             'ripgrep: faster search inside files'
             'gocryptfs: locked folders')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('fbe021b7c9fc2610539f043ca0e37695d57df2f512320b76ce04e6726be5d975')
+sha256sums=('1b12c1da4cb701ef441d657f39755afd75a8e27cc1f347764b3e25049da399ed')
 
 build() {
   cd "$pkgname-$pkgver"
