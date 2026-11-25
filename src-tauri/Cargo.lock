@@ -1839,7 +1839,7 @@ dependencies = [
 
 [[package]]
 name = "inode"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "base64 0.23.1",
  "chrono",
