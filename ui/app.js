@@ -637,6 +637,7 @@ async function start() {
     if (drawn() !== was) { app.rebuildKeys(); app.renderPlaces(); app.panes.forEach((p) => p.renderTabs()); }
   });
   addEventListener('focus', () => invoke('places').then((p) => app.renderPlaces(p)).catch(() => {})); // a drive may have come back
+  addEventListener('focus', () => app.panes.forEach((p) => p.sync())); // files another app moved while Inode was in the background
   // A folder the window was opened for wins over the remembered left pane.
   // Settings: "Reopen tabs from last time". Off = a plain start opens home in both panes; a window opened for a folder is as before.
   const restore = fromArgs || app.state.restoreTabs !== false;

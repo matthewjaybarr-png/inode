@@ -156,6 +156,19 @@ export class Pane {
   }
 
   refresh() { if (this.query) return this.runSearch(); if (this.path != null) return this.go(this.path, { push: false, keep: this.rows[this.cursor]?.path }); }
+  // On window focus: another app may have moved files in or out (a cut pasted elsewhere). Re-list quietly and redraw only
+  // if something changed, keeping the selection. Skipped mid-search and mid-rename so nothing the user is typing is lost.
+  async sync() {
+    if (this.query || !isFolder(this.path) || this.root.querySelector('.rename-input')) return;
+    const path = this.path;
+    let l; try { l = await invoke('list_dir', { path }); } catch { return; } // a folder that vanished is left to the next real navigation
+    const sig = (es) => es.map((e) => `${e.path}\0${e.size}\0${e.mtime}`).join('\n');
+    if (this.path !== path || l.path !== path || sig(l.entries) === sig(this.entries)) return;
+    this.entries = l.entries;
+    const live = new Set(l.entries.map((e) => e.path));
+    for (const p of [...this.selected]) if (!live.has(p)) this.selected.delete(p);
+    this.render(this.rows[this.cursor]?.path);
+  }
   goBack() { if (this.back.length) { const p = this.back.pop(); this.fwd.push(this.path); this.go(p, { push: false }); } }
   goForward() { if (this.fwd.length) { const p = this.fwd.pop(); this.back.push(this.path); this.go(p, { push: false }); } }
   up() { if (this.parent != null) this.go(this.parent); }
