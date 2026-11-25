@@ -1,6 +1,6 @@
 pkgbase = inode
 	pkgdesc = Keyboard-first, two-pane file manager for Linux
-	pkgver = 0.7.2
+	pkgver = 0.7.3
 	pkgrel = 1
 	url = https://github.com/matthewjaybarr-png/inode
 	arch = x86_64
@@ -16,7 +16,7 @@ pkgbase = inode
 	optdepends = udisks2: eject and encrypted drives
 	optdepends = ripgrep: faster search inside files
 	optdepends = gocryptfs: locked folders
-	source = inode-0.7.2.tar.gz::https://github.com/matthewjaybarr-png/inode/archive/refs/tags/v0.7.2.tar.gz
-	sha256sums = 3a9fa4d2fa79356da8726b0fe48e80361ad1807547c77b268fe799e772b42791
+	source = inode-0.7.3.tar.gz::https://github.com/matthewjaybarr-png/inode/archive/refs/tags/v0.7.3.tar.gz
+	sha256sums = fbe021b7c9fc2610539f043ca0e37695d57df2f512320b76ce04e6726be5d975
 
 pkgname = inode
