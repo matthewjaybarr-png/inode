@@ -3,10 +3,10 @@
 
 type R<T> = Result<T, String>;
 
-/// Of the types a Wayland clipboard offers, the one that carries files: GNOME's first (it says cut or copy).
+/// Of the types a clipboard offers, the one that carries files: GNOME's or MATE's first (they say cut or copy).
 #[cfg(any(not(windows), test))]
 fn file_type(offered: &str) -> Option<&'static str> {
-    ["x-special/gnome-copied-files", "text/uri-list"].into_iter().find(|t| offered.lines().any(|l| l.trim() == *t))
+    ["x-special/gnome-copied-files", "x-special/mate-copied-files", "text/uri-list"].into_iter().find(|t| offered.lines().any(|l| l.trim() == *t))
 }
 
 /// Wayland sessions use wl-clipboard; X11 sessions (no WAYLAND_DISPLAY) use xclip.
@@ -15,8 +15,9 @@ fn wayland() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())
 }
 
-/// Offers both file types: text/uri-list (every file manager, browser and chat app) and x-special/gnome-copied-files
-/// (Nautilus, Caja, Nemo, Thunar: its first line says cut or copy). X11 and Wayland clipboards are served by the
+/// Offers the file types: text/uri-list (every file manager, browser and chat app), x-special/gnome-copied-files
+/// (Nautilus, Nemo, Thunar: its first line says cut or copy) and the same payload as x-special/mate-copied-files
+/// (Caja, MATE's fork, reads only that name). X11 and Wayland clipboards are served by the
 /// process that set them, so a detached copy of Inode (`--clip-hold`) holds them, and they outlive this window the
 /// way wl-copy's and xclip's did.
 #[cfg(not(windows))]
@@ -61,7 +62,11 @@ pub fn hold() -> i32 {
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
     let (uris, gnome) = payloads(&input);
-    let offers = [("text/uri-list", uris.into_bytes()), ("x-special/gnome-copied-files", gnome.into_bytes())];
+    let offers = [
+        ("text/uri-list", uris.into_bytes()),
+        ("x-special/gnome-copied-files", gnome.clone().into_bytes()),
+        ("x-special/mate-copied-files", gnome.into_bytes()),
+    ];
     let say = |m: &str| {
         let mut out = std::io::stdout();
         let _ = writeln!(out, "{m}").and_then(|_| out.flush());
@@ -225,6 +230,7 @@ mod tests {
     #[test]
     fn picks_the_type_that_carries_files() {
         assert_eq!(super::file_type("text/plain\ntext/uri-list\nx-special/gnome-copied-files\n"), Some("x-special/gnome-copied-files"));
+        assert_eq!(super::file_type("text/uri-list\nx-special/mate-copied-files\n"), Some("x-special/mate-copied-files"));
         assert_eq!(super::file_type("TEXT\r\ntext/uri-list\r\n"), Some("text/uri-list"));
         assert_eq!(super::file_type("text/plain\ntext/html\n"), None);
         assert_eq!(super::file_type(""), None);
